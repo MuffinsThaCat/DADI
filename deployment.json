@@ -1,0 +1,29 @@
+{
+  "network": "hardhat",
+  "contractAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "owner": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "testAccounts": {
+    "bidder1": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "bidder2": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+  },
+  "testAuctions": [
+    {
+      "deviceId": "0xc1ab2e6694fcf29716db6b9a5897b25861df980c9141c6b7fc5ecf4fab2c5f0c",
+      "startTime": 1740499792,
+      "duration": 3600,
+      "minBid": {
+        "type": "BigNumber",
+        "hex": "0x016345785d8a0000"
+      }
+    },
+    {
+      "deviceId": "0xd6e1999503a9155109b1dacde61cdf58c0eb57d510785c1cdf4d31f31fe74731",
+      "startTime": 1740499552,
+      "duration": 1800,
+      "minBid": {
+        "type": "BigNumber",
+        "hex": "0xb1a2bc2ec50000"
+      }
+    }
+  ]
+}
