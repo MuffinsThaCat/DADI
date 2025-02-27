@@ -1,5 +1,4 @@
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/web3_service.dart';
@@ -22,20 +21,29 @@ class AuctionScreen extends StatefulWidget {
 
 class _AuctionScreenState extends State<AuctionScreen> {
   final _formKey = GlobalKey<FormState>();
-  final DateTime _startTime = DateTime.now().add(const Duration(minutes: 5));
-  final Duration _duration = const Duration(minutes: 30);
-  final String _minBid = '0.01';
+  DateTime _startDate = DateTime.now();
+  DateTime _endDate = DateTime.now().add(const Duration(hours: 24));
   bool _isLoading = false;
-  final TextEditingController _startTimeController = TextEditingController();
-  final TextEditingController _durationController = TextEditingController();
+  String? _errorMessage;
+  bool _isConnected = false;
+  final TextEditingController _startDateController = TextEditingController();
+  final TextEditingController _endDateController = TextEditingController();
   final TextEditingController _minBidController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _startTimeController.text = _formatDateTime(_startTime);
-    _durationController.text = _formatDuration(_duration);
-    _minBidController.text = _minBid;
+    _startDateController.text = _formatDateTime(_startDate);
+    _endDateController.text = _formatDateTime(_endDate);
+    _minBidController.text = '0.01';
+  }
+
+  @override
+  void dispose() {
+    _startDateController.dispose();
+    _endDateController.dispose();
+    _minBidController.dispose();
+    super.dispose();
   }
 
   @override
@@ -94,6 +102,61 @@ class _AuctionScreenState extends State<AuctionScreen> {
             ),
             const SizedBox(height: 16),
             TextFormField(
+              controller: _startDateController,
+              decoration: const InputDecoration(
+                labelText: 'Start Date',
+                hintText: 'YYYY-MM-DD HH:MM',
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter a start date';
+                }
+                try {
+                  DateTime.parse(value);
+                  return null;
+                } catch (e) {
+                  return 'Invalid date format';
+                }
+              },
+              onChanged: (value) {
+                try {
+                  _startDate = DateTime.parse(value);
+                } catch (e) {
+                  // Invalid date format, ignore
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _endDateController,
+              decoration: const InputDecoration(
+                labelText: 'End Date',
+                hintText: 'YYYY-MM-DD HH:MM',
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter an end date';
+                }
+                try {
+                  final endDate = DateTime.parse(value);
+                  if (endDate.isBefore(_startDate)) {
+                    return 'End date must be after start date';
+                  }
+                  return null;
+                } catch (e) {
+                  return 'Invalid date format';
+                }
+              },
+              onChanged: (value) {
+                try {
+                  _endDate = DateTime.parse(value);
+                } catch (e) {
+                  // Invalid date format, ignore
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
               decoration: const InputDecoration(
                 labelText: 'Minimum Bid (ETH)',
                 border: OutlineInputBorder(),
@@ -118,34 +181,57 @@ class _AuctionScreenState extends State<AuctionScreen> {
                       if (_formKey.currentState!.validate()) {
                         setState(() => _isLoading = true);
                         try {
+                          // Check if web3 is connected
+                          if (!web3.isConnected) {
+                            throw Exception('Wallet not connected. Please connect your wallet first.');
+                          }
+                          
+                          // Check if contract is initialized
+                          if (!web3.isContractInitialized) {
+                            await web3.initializeContract();
+                            if (!web3.isContractInitialized) {
+                              throw Exception('Failed to initialize contract. Please try again.');
+                            }
+                          }
+                          
+                          // Validate contract with a test call
+                          final isValid = await web3.testContract();
+                          if (!isValid) {
+                            throw Exception('Contract validation failed. Please check your connection and try again.');
+                          }
+                          
                           final deviceId = buttplug.currentDevice;
                           if (deviceId == null) {
                             throw Exception('No device selected');
                           }
 
-                          // Convert device ID to bytes32 by hashing it
-                          final bytes = utf8.encode(deviceId);
-                          final digest = sha256.convert(bytes);
-                          final deviceIdBytes32 = '0x${digest.toString()}';
-                          final minBidWei = BigInt.from(
-                            (double.parse(_minBidController.text) * 1e18).toInt(),
+                          // Convert form values to appropriate types
+                          final minBidEth = double.parse(_minBidController.text);
+                          
+                          // Convert ETH to wei (1 ETH = 10^18 wei)
+                          final minBidWei = _toWei(minBidEth);
+                          
+                          _log('Creating auction with params:');
+                          _log('Device ID: $deviceId');
+                          _log('Start Date: $_startDate');
+                          _log('End Date: $_endDate');
+                          _log('Min Bid: $minBidEth ETH ($minBidWei wei)');
+                          
+                          // Call the contract method
+                          await web3.createAuction(
+                            deviceId,
+                            _startDate,
+                            _endDate,
+                            minBidWei,
                           );
-
-                          // Ensure start time is at least 5 minutes in the future
-                          final now = DateTime.now();
-                          final minStartTime = now.add(const Duration(minutes: 5));
-                          final startTime = _startTime.isBefore(minStartTime) ? minStartTime : _startTime;
-                          final startTimeSeconds = startTime.millisecondsSinceEpoch ~/ 1000;
-
-                          try {
-                            await web3.createAuction(
-                              deviceIdBytes32,
-                              BigInt.from(startTimeSeconds),
-                              BigInt.from(_duration.inSeconds),
-                              minBidWei,
+                          
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Auction created successfully!'),
+                                backgroundColor: Colors.green,
+                              ),
                             );
-                          } catch (e) {
-                            rethrow;
                           }
                         } catch (e) {
                           if (mounted) {
@@ -173,69 +259,150 @@ class _AuctionScreenState extends State<AuctionScreen> {
   }
 
   Widget _buildActiveAuctionsTab(Web3Service web3) {
-    return ListView.builder(
-      itemCount: web3.activeAuctions.length,
-      itemBuilder: (context, index) {
-        final deviceId = web3.activeAuctions.keys.elementAt(index);
-        final auction = web3.activeAuctions[deviceId]!;
-        final now = DateTime.now();
-        final hasStarted = now.isAfter(auction['startTime'] as DateTime);
-        final hasEnded = now.isAfter(auction['endTime'] as DateTime);
-        final hasControl = auction['controller'] == web3.currentAddress;
-
-        return Card(
-          margin: const EdgeInsets.all(8.0),
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Device ID: ${deviceId.substring(0, 10)}...'),
-                Text('Owner: ${_formatAddress(auction['deviceOwner'] as String)}'),
-                Text('Start Time: ${_formatDateTime(auction['startTime'] as DateTime)}'),
-                Text('End Time: ${_formatDateTime(auction['endTime'] as DateTime)}'),
-                Text('Minimum Bid: ${_formatEther(auction['minBid'] as BigInt)} ETH'),
-                if (auction['highestBid'] != null && (auction['highestBid'] as BigInt) > BigInt.zero)
-                  Text(
-                    'Current Bid: ${_formatEther(auction['highestBid'] as BigInt)} ETH by ${_formatAddress(auction['highestBidder'] as String)}',
-                  ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    if (hasStarted && !hasEnded)
-                      ElevatedButton(
-                        onPressed: () => _showBidDialog(context, web3, deviceId, auction),
-                        child: const Text('Place Bid'),
-                      ),
-                    if (hasEnded && auction['active'] as bool)
-                      ElevatedButton(
-                        onPressed: () => _finalizeAuction(web3, deviceId),
-                        child: const Text('Finalize Auction'),
-                      ),
-                    if (hasControl)
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => DeviceControlScreen(
-                                deviceId: deviceId,
-                                endTime: auction['endTime'] as DateTime,
-                              ),
-                            ),
-                          );
-                        },
-                        child: const Text('Control Device'),
-                      ),
-                  ],
+    if (!web3.isConnected) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('Connect your wallet to view auctions'),
+            const SizedBox(height: 16),
+            if (_errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  _errorMessage!,
+                  style: const TextStyle(color: Colors.red),
                 ),
-              ],
+              ),
+            ElevatedButton(
+              onPressed: _isLoading ? null : _connectWallet,
+              child: _isLoading
+                  ? const CircularProgressIndicator()
+                  : const Text('Connect Wallet'),
             ),
-          ),
-        );
+          ],
+        ),
+      );
+    }
+    
+    return FutureBuilder(
+      future: web3.loadActiveAuctions(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done) {
+          return ListView.builder(
+            itemCount: web3.activeAuctions.length,
+            itemBuilder: (context, index) {
+              final deviceId = web3.activeAuctions.keys.elementAt(index);
+              final auction = web3.activeAuctions[deviceId]!;
+              
+              // Skip inactive auctions
+              if (auction['endTime'] == null) {
+                return const SizedBox.shrink();
+              }
+              
+              final now = DateTime.now();
+              final endTimeBigInt = auction['endTime'] as BigInt;
+              final endTime = DateTime.fromMillisecondsSinceEpoch(
+                (endTimeBigInt.toInt() * 1000)
+              );
+              final hasEnded = now.isAfter(endTime);
+              final hasControl = auction['highestBidder'] == web3.currentAddress;
+              final owner = auction['owner'];  
+              final highestBid = auction['highestBid'] as BigInt;
+              final highestBidder = auction['highestBidder'];
+              final minBid = auction['minBid'] as BigInt;
+
+              return Card(
+                margin: const EdgeInsets.all(8.0),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Device ID: ${deviceId.substring(0, 10)}...'),
+                      Text('Owner: ${_formatAddress(owner)}'),
+                      Text('End Time: ${_formatDateTime(endTime)}'),
+                      Text('Minimum Bid: ${_formatEther(minBid)} ETH'),
+                      if (highestBid > BigInt.zero && highestBidder != null)
+                        Text(
+                          'Current Bid: ${_formatEther(highestBid)} ETH by ${_formatAddress(highestBidder)}',
+                        ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          if (!hasEnded)
+                            ElevatedButton(
+                              onPressed: () => _showBidDialog(context, web3, deviceId, auction),
+                              child: const Text('Place Bid'),
+                            ),
+                          if (hasEnded && !auction['finalized'])
+                            ElevatedButton(
+                              onPressed: () => _finalizeAuction(web3, deviceId),
+                              child: const Text('Finalize Auction'),
+                            ),
+                          if (hasControl)
+                            ElevatedButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => DeviceControlScreen(
+                                      deviceId: deviceId,
+                                      endTime: endTime,
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: const Text('Control Device'),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        } else {
+          return const Center(child: CircularProgressIndicator());
+        }
       },
     );
+  }
+
+  Future<void> _connectWallet() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final web3 = Provider.of<Web3Service>(context, listen: false);
+      await web3.connect();
+      
+      // Give it a moment to connect before trying to initialize
+      await Future.delayed(const Duration(seconds: 1));
+      
+      // Manually initialize contract and load auctions
+      try {
+        await web3.initializeContract();
+        await web3.loadActiveAuctions();
+      } catch (e) {
+        developer.log('Contract initialization error: $e');
+        // Continue anyway - we're at least connected
+      }
+      
+      setState(() {
+        _isConnected = true;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = e.toString();
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _showBidDialog(
@@ -301,12 +468,25 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
   Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
     try {
-      setState(() => _isLoading = true);
       await web3.finalizeAuction(deviceId);
+      
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Auction finalized successfully')),
-        );
+        final auction = web3.activeAuctions[deviceId];
+        if (auction != null) {
+          final endTimeBigInt = auction['endTime'] as BigInt;
+          final endTime = DateTime.fromMillisecondsSinceEpoch(
+            (endTimeBigInt.toInt() * 1000)
+          );
+          
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => DeviceControlScreen(
+                deviceId: deviceId,
+                endTime: endTime,
+              ),
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -314,8 +494,6 @@ class _AuctionScreenState extends State<AuctionScreen> {
           SnackBar(content: Text('Error: $e')),
         );
       }
-    } finally {
-      setState(() => _isLoading = false);
     }
   }
 
@@ -324,96 +502,19 @@ class _AuctionScreenState extends State<AuctionScreen> {
   }
 
   String _formatDateTime(DateTime dateTime) {
-    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} '
-        '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
-  }
-
-  String _formatDuration(Duration duration) {
-    return '${duration.inHours.toString().padLeft(2, '0')}:${duration.inMinutes % 60}';
+    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} ${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
   }
 
   String _formatEther(BigInt wei) {
-    return (wei / BigInt.from(1e18)).toStringAsFixed(4);
-  }
-}
-
-class _DurationPicker extends StatefulWidget {
-  final Duration initialDuration;
-
-  const _DurationPicker({required this.initialDuration});
-
-  @override
-  State<_DurationPicker> createState() => _DurationPickerState();
-}
-
-class _DurationPickerState extends State<_DurationPicker> {
-  late int _hours;
-  late int _minutes;
-
-  @override
-  void initState() {
-    super.initState();
-    _hours = widget.initialDuration.inHours;
-    _minutes = widget.initialDuration.inMinutes % 60;
+    final ethValue = wei.toDouble() / 1e18;
+    return ethValue.toStringAsFixed(4);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Select Duration'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  decoration: const InputDecoration(
-                    labelText: 'Hours',
-                  ),
-                  keyboardType: TextInputType.number,
-                  controller: TextEditingController(text: _hours.toString()),
-                  onChanged: (value) {
-                    setState(() {
-                      _hours = int.tryParse(value) ?? 0;
-                    });
-                  },
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: TextField(
-                  decoration: const InputDecoration(
-                    labelText: 'Minutes',
-                  ),
-                  keyboardType: TextInputType.number,
-                  controller: TextEditingController(text: _minutes.toString()),
-                  onChanged: (value) {
-                    setState(() {
-                      _minutes = int.tryParse(value) ?? 0;
-                    });
-                  },
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        TextButton(
-          onPressed: () {
-            Navigator.pop(
-              context,
-              Duration(hours: _hours, minutes: _minutes),
-            );
-          },
-          child: const Text('OK'),
-        ),
-      ],
-    );
+  BigInt _toWei(double eth) {
+    return BigInt.from(eth * 1e18);
+  }
+
+  void _log(String message) {
+    developer.log('AuctionScreen: $message');
   }
 }

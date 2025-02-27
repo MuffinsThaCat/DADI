@@ -18,9 +18,13 @@ class ButtplugService extends ChangeNotifier {
   WebSocketChannel? _channel;
   bool _isConnected = false;
   final List<ButtplugDevice> _devices = [];
+  String? _currentDevice;
+  double _currentVibration = 0.0;
 
   bool get isConnected => _isConnected;
   List<ButtplugDevice> get devices => _devices;
+  String? get currentDevice => _currentDevice;
+  double get currentVibration => _currentVibration;
 
   Future<void> connect() async {
     try {
@@ -89,6 +93,51 @@ class ButtplugService extends ChangeNotifier {
       'deviceId': deviceId,
       'message': command,
     });
+  }
+
+  Future<List<String>> scanForDevices() async {
+    if (!_isConnected) {
+      return [];
+    }
+    
+    await startScanning();
+    // In a real implementation, we would wait for device discovery events
+    // For now, just return a mock list
+    return _devices.map((device) => device.id).toList();
+  }
+
+  Future<void> connectToDevice(String deviceId) async {
+    if (!_isConnected) return;
+    
+    // In a real implementation, we would send a command to connect to the device
+    // For now, just store the device ID
+    _currentDevice = deviceId;
+    notifyListeners();
+  }
+
+  Future<void> startVibration(double intensity) async {
+    if (!_isConnected) throw Exception('Not connected to device');
+    if (_currentDevice == null) throw Exception('No device selected');
+    if (intensity < 0 || intensity > 1) {
+      throw Exception('Intensity must be between 0 and 1');
+    }
+
+    _currentVibration = intensity;
+    
+    // In a real implementation, we would send a command to the device
+    await sendDeviceCommand(_currentDevice!, 'VibrateCmd ${intensity * 100}');
+    notifyListeners();
+  }
+
+  Future<void> stopVibration() async {
+    if (!_isConnected) throw Exception('Not connected to device');
+    if (_currentDevice == null) throw Exception('No device selected');
+    
+    _currentVibration = 0.0;
+    
+    // In a real implementation, we would send a command to the device
+    await sendDeviceCommand(_currentDevice!, 'VibrateCmd 0');
+    notifyListeners();
   }
 
   Future<void> _sendMessage(Map<String, dynamic> message) async {

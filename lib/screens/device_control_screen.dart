@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/mock_buttplug_service.dart';
@@ -19,11 +20,32 @@ class DeviceControlScreen extends StatefulWidget {
 class _DeviceControlScreenState extends State<DeviceControlScreen> {
   double _intensity = 0.0;
   bool _isConnected = false;
+  Timer? _controlTimer;
+  String? _currentDeviceId;
 
   @override
   void initState() {
     super.initState();
     _connectToDevice();
+    // Start timer to check control period
+    _controlTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          // Check if control period has expired
+          if (DateTime.now().isAfter(widget.endTime) && _intensity > 0) {
+            _intensity = 0;
+            final buttplug = context.read<MockButtplugService>();
+            buttplug.stopVibration();
+          }
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controlTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _connectToDevice() async {
@@ -32,8 +54,10 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> {
       if (!buttplug.isConnected) {
         await buttplug.connect();
       }
-      await buttplug.connectToDevice(widget.deviceId);
-      setState(() => _isConnected = true);
+      setState(() {
+        _isConnected = buttplug.isConnected;
+        _currentDeviceId = buttplug.currentDevice;
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -43,11 +67,25 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> {
     }
   }
 
+  bool get _hasControl {
+    final now = DateTime.now();
+    return now.isBefore(widget.endTime);
+  }
+
+  void _updateIntensity(double value) {
+    setState(() => _intensity = value);
+    final buttplug = context.read<MockButtplugService>();
+    if (value > 0) {
+      buttplug.startVibration(value);
+    } else {
+      buttplug.stopVibration();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final buttplug = context.watch<MockButtplugService>();
     final remainingTime = widget.endTime.difference(DateTime.now());
-    final hasControl = remainingTime.isNegative;
 
     return Scaffold(
       appBar: AppBar(
@@ -56,135 +94,45 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> {
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    Text(
-                      'Device Status',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 8),
-                    _buildStatusIndicator('Connection', buttplug.isConnected),
-                    const SizedBox(height: 8),
-                    _buildStatusIndicator(
-                      'Device',
-                      buttplug.currentDevice != null,
-                      subtitle: buttplug.currentDevice ?? 'Not connected',
-                    ),
-                    if (!hasControl) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        'Control expires in: ${_formatDuration(remainingTime)}',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ],
-                  ],
+            _buildStatusIndicator(
+              'Device Connection',
+              _isConnected,
+              subtitle: _currentDeviceId != null ? 'Device ID: ${_currentDeviceId!}' : null,
+            ),
+            _buildStatusIndicator(
+              'Control Period',
+              _hasControl,
+              subtitle: _hasControl
+                  ? 'Time remaining: ${_formatDuration(remainingTime)}'
+                  : 'Control period has ended',
+            ),
+            const SizedBox(height: 24),
+            if (_hasControl && _isConnected) ...[
+              Text(
+                'Intensity: ${(_intensity * 100).toStringAsFixed(0)}%',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              Slider(
+                value: _intensity,
+                onChanged: _updateIntensity,
+              ),
+              Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    setState(() => _intensity = 0.0);
+                    buttplug.stopVibration();
+                  },
+                  child: const Text('Stop'),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    Text(
-                      'Vibration Control',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        const Icon(Icons.vibration),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Slider(
-                            value: _intensity,
-                            onChanged: hasControl || !_isConnected
-                                ? null
-                                : (value) {
-                                    setState(() => _intensity = value);
-                                    buttplug.startVibration(value);
-                                  },
-                            divisions: 20,
-                            label: '${(_intensity * 100).round()}%',
-                          ),
-                        ),
-                        SizedBox(
-                          width: 50,
-                          child: Text(
-                            '${(_intensity * 100).round()}%',
-                            textAlign: TextAlign.end,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        ElevatedButton(
-                          onPressed: hasControl || !_isConnected
-                              ? null
-                              : () {
-                                  setState(() => _intensity = 0.0);
-                                  buttplug.stopVibration();
-                                },
-                          child: const Text('Stop'),
-                        ),
-                        ElevatedButton(
-                          onPressed: hasControl || !_isConnected
-                              ? null
-                              : () {
-                                  setState(() => _intensity = 0.5);
-                                  buttplug.startVibration(0.5);
-                                },
-                          child: const Text('Medium'),
-                        ),
-                        ElevatedButton(
-                          onPressed: hasControl || !_isConnected
-                              ? null
-                              : () {
-                                  setState(() => _intensity = 1.0);
-                                  buttplug.startVibration(1.0);
-                                },
-                          child: const Text('Max'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            if (buttplug.currentVibration > 0) ...[
-              const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      Text(
-                        'Device Feedback',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const SizedBox(height: 16),
-                      LinearProgressIndicator(
-                        value: buttplug.currentVibration,
-                        backgroundColor: Colors.grey[200],
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Current Intensity: ${(buttplug.currentVibration * 100).round()}%',
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                    ],
+            ] else if (!_hasControl) ...[
+              Center(
+                child: Text(
+                  'Control period has ended',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: Colors.red,
                   ),
                 ),
               ),
@@ -196,34 +144,51 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> {
   }
 
   Widget _buildStatusIndicator(String label, bool isActive, {String? subtitle}) {
-    return Row(
-      children: [
-        Icon(
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8.0),
+      child: ListTile(
+        leading: Icon(
           isActive ? Icons.check_circle : Icons.error,
           color: isActive ? Colors.green : Colors.red,
+          size: 28,
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label),
-              if (subtitle != null)
-                Text(
-                  subtitle,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-            ],
-          ),
+        title: Text(
+          label,
+          style: Theme.of(context).textTheme.titleMedium,
         ),
-      ],
+        subtitle: subtitle != null 
+          ? Text(
+              subtitle,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: isActive ? Colors.green.shade700 : Colors.red.shade700,
+              ),
+            ) 
+          : null,
+        trailing: isActive 
+          ? const Icon(Icons.check, color: Colors.green)
+          : const Icon(Icons.warning, color: Colors.red),
+      ),
     );
   }
 
   String _formatDuration(Duration duration) {
+    if (duration.isNegative) {
+      return 'Expired';
+    }
+    
     final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60);
     final seconds = duration.inSeconds.remainder(60);
-    return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    
+    final parts = <String>[];
+    if (hours > 0) {
+      parts.add('${hours}h');
+    }
+    if (minutes > 0 || hours > 0) {
+      parts.add('${minutes}m');
+    }
+    parts.add('${seconds}s');
+    
+    return parts.join(' ');
   }
 }
