@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart';
@@ -328,6 +329,110 @@ class WalletServiceWeb extends WalletServiceInterface {
   }
   
   @override
+  Future<String?> getMnemonic() async {
+    await _ensurePrefsInitialized();
+    
+    if (!_isUnlocked) {
+      return null;
+    }
+    
+    try {
+      // Get credentials from current session
+      if (_credentials == null) {
+        return null;
+      }
+      
+      // Get encrypted mnemonic
+      final encryptedMnemonic = _prefs.getString(_walletMnemonicKey);
+      if (encryptedMnemonic == null) {
+        return null;
+      }
+      
+      // We need to use the cached password from memory
+      // This is only available when the wallet is unlocked
+      final cachedPassword = _getCachedPassword();
+      if (cachedPassword == null) {
+        return null;
+      }
+      
+      // Decrypt mnemonic
+      return CryptoUtils.decryptData(encryptedMnemonic, cachedPassword);
+    } catch (e) {
+      debugPrint('Error getting mnemonic: $e');
+      return null;
+    }
+  }
+  
+  @override
+  Future<String?> getPrivateKey() async {
+    await _ensurePrefsInitialized();
+    
+    if (!_isUnlocked) {
+      return null;
+    }
+    
+    try {
+      // Get credentials from current session
+      if (_credentials == null) {
+        return null;
+      }
+      
+      // Get encrypted private key
+      final encryptedPrivateKey = _prefs.getString(_walletPrivateKeyKey);
+      if (encryptedPrivateKey == null) {
+        return null;
+      }
+      
+      // We need to use the cached password from memory
+      // This is only available when the wallet is unlocked
+      final cachedPassword = _getCachedPassword();
+      if (cachedPassword == null) {
+        return null;
+      }
+      
+      // Decrypt private key
+      return CryptoUtils.decryptData(encryptedPrivateKey, cachedPassword);
+    } catch (e) {
+      debugPrint('Error getting private key: $e');
+      return null;
+    }
+  }
+  
+  // This is a helper method to get the cached password
+  // In a real implementation, this would be securely stored in memory
+  // For this demo, we'll use a simple approach
+  String? _getCachedPassword() {
+    // This is a simplified implementation
+    // In a real app, you would use a more secure approach
+    // like a secure keychain or encrypted storage
+    if (!_isUnlocked) {
+      return null;
+    }
+    
+    // In a real implementation, you would have a secure way to
+    // retrieve the password that was used to unlock the wallet
+    // For now, we'll return a placeholder that should be replaced
+    // with a proper implementation
+    return _getTemporaryUnlockKey();
+  }
+  
+  // This is a temporary method that should be replaced with a proper implementation
+  String? _getTemporaryUnlockKey() {
+    // In a real implementation, this would be securely stored
+    // For demo purposes, we'll use a simple approach
+    final encryptedPrivateKey = _prefs.getString(_walletPrivateKeyKey);
+    final encryptedMnemonic = _prefs.getString(_walletMnemonicKey);
+    
+    if (encryptedPrivateKey == null || encryptedMnemonic == null) {
+      return null;
+    }
+    
+    // This is just for demo purposes and should be replaced
+    // with a proper secure implementation in a real app
+    return 'temporary_unlock_key';
+  }
+  
+  @override
   Future<String> sendTransaction({
     required String toAddress,
     required double amount,
@@ -458,16 +563,105 @@ class WalletServiceWeb extends WalletServiceInterface {
   Future<void> resetWallet() async {
     await _ensurePrefsInitialized();
     
-    await _prefs.remove(_walletAddressKey);
-    await _prefs.remove(_walletPrivateKeyKey);
-    await _prefs.remove(_walletMnemonicKey);
-    await _prefs.remove(_walletPasswordHashKey);
+    _prefs.remove(_walletAddressKey);
+    _prefs.remove(_walletPrivateKeyKey);
+    _prefs.remove(_walletMnemonicKey);
+    _prefs.remove(_walletPasswordHashKey);
     
     _currentAddress = null;
     _credentials = null;
     _isUnlocked = false;
     
     notifyListeners();
+  }
+  
+  @override
+  Future<String> signMessage({required String message}) async {
+    await _ensurePrefsInitialized();
+    
+    if (!_isUnlocked || _credentials == null) {
+      throw Exception('Wallet is locked');
+    }
+    
+    try {
+      // Convert message to bytes
+      final messageBytes = Uint8List.fromList(utf8.encode(message));
+      
+      // Create Ethereum signed message hash
+      // Follows the format: "\x19Ethereum Signed Message:\n" + message.length + message
+      final prefix = '\u0019Ethereum Signed Message:\n${messageBytes.length}';
+      final prefixBytes = Uint8List.fromList(utf8.encode(prefix));
+      
+      // Concatenate and hash
+      final Uint8List concat = Uint8List(prefixBytes.length + messageBytes.length)
+        ..setAll(0, prefixBytes)
+        ..setAll(prefixBytes.length, messageBytes);
+      final Uint8List hash = CryptoUtils.keccak256(concat);
+      
+      // Sign the hash
+      final signature = _credentials!.signToEcSignature(hash);
+      
+      // Convert to hex string with 0x prefix
+      final r = signature.r.toRadixString(16).padLeft(64, '0');
+      final s = signature.s.toRadixString(16).padLeft(64, '0');
+      final v = signature.v.toRadixString(16).padLeft(2, '0');
+      
+      return '0x$r$s$v';
+    } catch (e) {
+      debugPrint('Error signing message: $e');
+      throw Exception('Failed to sign message: ${e.toString()}');
+    }
+  }
+  
+  @override
+  Future<String> signTypedData({required Map<String, dynamic> typedData}) async {
+    await _ensurePrefsInitialized();
+    
+    if (!_isUnlocked || _credentials == null) {
+      throw Exception('Wallet is locked');
+    }
+    
+    try {
+      // For EIP-712 typed data signing, we would need a proper implementation
+      // that follows the EIP-712 standard. This is a simplified version.
+      
+      // Convert typed data to JSON string
+      final jsonData = jsonEncode(typedData);
+      
+      // Hash the JSON data
+      final dataBytes = Uint8List.fromList(utf8.encode(jsonData));
+      final hash = CryptoUtils.keccak256(dataBytes);
+      
+      // Sign the hash
+      final signature = _credentials!.signToEcSignature(hash);
+      
+      // Convert to hex string with 0x prefix
+      final r = signature.r.toRadixString(16).padLeft(64, '0');
+      final s = signature.s.toRadixString(16).padLeft(64, '0');
+      final v = signature.v.toRadixString(16).padLeft(2, '0');
+      
+      return '0x$r$s$v';
+    } catch (e) {
+      debugPrint('Error signing typed data: $e');
+      throw Exception('Failed to sign typed data: ${e.toString()}');
+    }
+  }
+  
+  /// Computes the Keccak-256 hash of the input
+  Uint8List keccak256(Uint8List input) {
+    // Use the crypto_utils implementation
+    return CryptoUtils.keccak256(input);
+  }
+  
+  /// Helper method to use keccak on ASCII strings
+  Uint8List keccakAscii(String input) {
+    final bytes = Uint8List.fromList(utf8.encode(input));
+    return CryptoUtils.keccak256(bytes);
+  }
+  
+  Future<bool> isValidAddress(String address) async {
+    // Implement address validation logic here
+    return true;
   }
   
   @override

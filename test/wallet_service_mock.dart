@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:dadi/services/wallet_service_interface.dart';
 
 /// Mock implementation of WalletService for testing
@@ -147,6 +148,26 @@ class MockWalletService extends WalletServiceInterface {
   }
   
   @override
+  Future<String?> getMnemonic() async {
+    if (!_isUnlocked) {
+      return null;
+    }
+    
+    // Return a mock mnemonic phrase for testing
+    return 'test abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  }
+  
+  @override
+  Future<String?> getPrivateKey() async {
+    if (!_isUnlocked) {
+      return null;
+    }
+    
+    // Return a mock private key for testing
+    return '0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  }
+  
+  @override
   Future<String> sendTransaction({
     required String toAddress,
     required double amount,
@@ -242,8 +263,52 @@ class MockWalletService extends WalletServiceInterface {
   }
   
   @override
+  Future<String> signMessage({required String message}) async {
+    if (delayInitialization) {
+      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+    }
+    
+    if (!_isUnlocked) {
+      throw Exception('Wallet is locked');
+    }
+    
+    // Return a mock signature
+    return '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef00';
+  }
+  
+  @override
+  Future<String> signTypedData({required Map<String, dynamic> typedData}) async {
+    if (delayInitialization) {
+      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+    }
+    
+    if (!_isUnlocked) {
+      throw Exception('Wallet is locked');
+    }
+    
+    // Return a mock signature
+    return '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab01';
+  }
+  
+  Future<bool> isValidAddress(String address) async {
+    return address.startsWith('0x') && address.length == 42;
+  }
+  
+  /// Computes the Keccak-256 hash of the input
+  Uint8List keccak256(Uint8List input) {
+    // This is a mock implementation that returns a fixed hash for testing
+    return Uint8List.fromList(List.generate(32, (index) => index));
+  }
+  
+  /// Helper method to use keccak on ASCII strings
+  Uint8List keccakAscii(String input) {
+    // This is a mock implementation that returns a fixed hash for testing
+    return Uint8List.fromList(List.generate(32, (index) => index));
+  }
+  
+  @override
   void dispose() {
-    // Call super.dispose() as required by @mustCallSuper annotation
+    // Call super.dispose() as required by @mustCallSuper
     super.dispose();
   }
 }
