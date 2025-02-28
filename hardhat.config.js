@@ -1,9 +1,13 @@
 require("@nomicfoundation/hardhat-toolbox");
 require('dotenv').config();
 
+// Environment variables with fallbacks
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "0000000000000000000000000000000000000000000000000000000000000000";
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
-const GOERLI_RPC_URL = process.env.GOERLI_RPC_URL || "https://goerli.infura.io/v3/your-api-key";
+const SEPOLIA_RPC_URL = process.env.SEPOLIA_RPC_URL || "https://sepolia.infura.io/v3/your-api-key";
+const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL || "https://mainnet.infura.io/v3/your-api-key";
+const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || "https://polygon-mainnet.infura.io/v3/your-api-key";
+const MUMBAI_RPC_URL = process.env.MUMBAI_RPC_URL || "https://polygon-mumbai.infura.io/v3/your-api-key";
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
@@ -23,22 +27,64 @@ module.exports = {
         auto: true,
         interval: 0
       },
-      // Enable CORS for local development
+      // Enable CORS for local development with more explicit settings
       jsonRpcServer: {
         host: "127.0.0.1",
-        port: 8545,
-        cors: "*",
+        port: 8087,
+        cors: {
+          origin: "*",
+          methods: ["GET", "POST"],
+          credentials: false
+        },
         rpcOnly: true
       }
     },
     localhost: {
       chainId: 31337,
-      url: "http://127.0.0.1:8545",
+      url: "http://127.0.0.1:8087",
+      timeout: 60000, // Increase timeout for local development
     },
-    goerli: {
-      url: GOERLI_RPC_URL,
+    // Updated from Goerli to Sepolia
+    sepolia: {
+      url: SEPOLIA_RPC_URL,
       accounts: [PRIVATE_KEY],
-      chainId: 5
+      chainId: 11155111,
+      verify: {
+        etherscan: {
+          apiKey: ETHERSCAN_API_KEY
+        }
+      }
+    },
+    // Additional networks for more deployment options
+    mainnet: {
+      url: MAINNET_RPC_URL,
+      accounts: [PRIVATE_KEY],
+      chainId: 1,
+      verify: {
+        etherscan: {
+          apiKey: ETHERSCAN_API_KEY
+        }
+      }
+    },
+    polygon: {
+      url: POLYGON_RPC_URL,
+      accounts: [PRIVATE_KEY],
+      chainId: 137,
+      verify: {
+        etherscan: {
+          apiKey: ETHERSCAN_API_KEY
+        }
+      }
+    },
+    mumbai: {
+      url: MUMBAI_RPC_URL,
+      accounts: [PRIVATE_KEY],
+      chainId: 80001,
+      verify: {
+        etherscan: {
+          apiKey: ETHERSCAN_API_KEY
+        }
+      }
     }
   },
   paths: {
@@ -46,5 +92,17 @@ module.exports = {
     tests: "./test",
     cache: "./cache",
     artifacts: "./artifacts"
+  },
+  etherscan: {
+    apiKey: ETHERSCAN_API_KEY
+  },
+  gasReporter: {
+    enabled: process.env.REPORT_GAS !== undefined,
+    currency: "USD",
+    outputFile: "gas-report.txt",
+    noColors: true,
+  },
+  mocha: {
+    timeout: 60000 // Increase timeout for tests
   }
 };

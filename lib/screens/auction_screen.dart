@@ -25,7 +25,6 @@ class _AuctionScreenState extends State<AuctionScreen> {
   DateTime _endDate = DateTime.now().add(const Duration(hours: 24));
   bool _isLoading = false;
   String? _errorMessage;
-  bool _isConnected = false;
   final TextEditingController _startDateController = TextEditingController();
   final TextEditingController _endDateController = TextEditingController();
   final TextEditingController _minBidController = TextEditingController();
@@ -50,6 +49,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
   Widget build(BuildContext context) {
     final web3 = context.watch<Web3Service>();
     final buttplug = context.watch<MockButtplugService>();
+    final isConnected = web3.isConnected;
+    final isMockMode = web3.isMockMode;
 
     return DefaultTabController(
       length: 2,
@@ -57,6 +58,36 @@ class _AuctionScreenState extends State<AuctionScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('DADI Auctions'),
+          actions: [
+            // Network status indicator
+            Tooltip(
+              message: isMockMode 
+                  ? 'Running in mock mode (no blockchain)' 
+                  : isConnected 
+                      ? 'Connected to blockchain' 
+                      : 'Not connected to blockchain',
+              child: IconButton(
+                icon: Icon(
+                  isMockMode 
+                      ? Icons.cloud_off 
+                      : isConnected 
+                          ? Icons.cloud_done 
+                          : Icons.cloud_off,
+                  color: isMockMode 
+                      ? Colors.orange 
+                      : isConnected 
+                          ? Colors.green 
+                          : Colors.red,
+                ),
+                onPressed: _showNetworkStatus,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _refreshAuctions,
+              tooltip: 'Refresh auctions',
+            ),
+          ],
           bottom: const TabBar(
             tabs: [
               Tab(text: 'Create Auction'),
@@ -179,7 +210,11 @@ class _AuctionScreenState extends State<AuctionScreen> {
                   ? null
                   : () async {
                       if (_formKey.currentState!.validate()) {
-                        setState(() => _isLoading = true);
+                        setState(() {
+                          _isLoading = true;
+                          _errorMessage = '';
+                        });
+
                         try {
                           // Check if web3 is connected
                           if (!web3.isConnected) {
@@ -195,9 +230,14 @@ class _AuctionScreenState extends State<AuctionScreen> {
                           }
                           
                           // Validate contract with a test call
-                          final isValid = await web3.testContract();
+                          bool isValid = await web3.testContract();
                           if (!isValid) {
-                            throw Exception('Contract validation failed. Please check your connection and try again.');
+                            _errorMessage = 'Contract validation failed. Please check your connection and try again.';
+                            _isLoading = false;
+                            if (mounted) {
+                              setState(() {});
+                            }
+                            return;
                           }
                           
                           final deviceId = buttplug.currentDevice;
@@ -208,38 +248,96 @@ class _AuctionScreenState extends State<AuctionScreen> {
                           // Convert form values to appropriate types
                           final minBidEth = double.parse(_minBidController.text);
                           
-                          // Convert ETH to wei (1 ETH = 10^18 wei)
-                          final minBidWei = _toWei(minBidEth);
-                          
                           _log('Creating auction with params:');
                           _log('Device ID: $deviceId');
                           _log('Start Date: $_startDate');
                           _log('End Date: $_endDate');
-                          _log('Min Bid: $minBidEth ETH ($minBidWei wei)');
+                          _log('Min Bid: $minBidEth ETH');
                           
                           // Call the contract method
-                          await web3.createAuction(
-                            deviceId,
-                            _startDate,
-                            _endDate,
-                            minBidWei,
-                          );
-                          
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Auction created successfully!'),
-                                backgroundColor: Colors.green,
-                              ),
+                          try {
+                            await web3.createAuction(
+                              deviceId,
+                              _startDate,
+                              _endDate,
+                              minBidEth,
                             );
-                          }
-                        } catch (e) {
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Error: $e'),
-                              ),
-                            );
+                            
+                            if (mounted) {
+                              // Check if we've switched to mock mode during the process
+                              if (web3.isMockMode) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Created mock auction due to blockchain connection issues'),
+                                    backgroundColor: Colors.orange,
+                                    duration: Duration(seconds: 5),
+                                  ),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Auction created successfully!'),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              }
+                            }
+                          } catch (e) {
+                            setState(() {
+                              _isLoading = false;
+                              String errorMsg = e.toString();
+                              if (errorMsg.startsWith('Exception: ')) {
+                                errorMsg = errorMsg.substring('Exception: '.length);
+                              }
+                              if (errorMsg.contains('insufficient funds')) {
+                                errorMsg = 'Insufficient funds in your wallet to create this auction';
+                              } else if (errorMsg.contains('user rejected')) {
+                                errorMsg = 'Transaction was rejected in your wallet';
+                              } else if (errorMsg.contains('Internal JSON-RPC error')) {
+                                errorMsg = 'Blockchain connection error. Switched to mock mode.';
+                              } else if (errorMsg.contains('execution reverted')) {
+                                final revertMatch = RegExp(r'reverted: (.+?)(?:,|$)').firstMatch(errorMsg);
+                                if (revertMatch != null) {
+                                  errorMsg = 'Smart contract error: ${revertMatch.group(1)}';
+                                } else {
+                                  errorMsg = 'Smart contract rejected the transaction';
+                                }
+                              }
+                              _errorMessage = errorMsg;
+                            });
+
+                            // Store context in a local variable to avoid using it across async gaps
+                            final currentContext = context;
+                            if (mounted) {
+                              ScaffoldMessenger.of(currentContext).showSnackBar(
+                                SnackBar(
+                                  content: Text('Error: $_errorMessage'),
+                                  backgroundColor: Colors.red,
+                                  duration: const Duration(seconds: 5),
+                                  action: SnackBarAction(
+                                    label: 'Details',
+                                    onPressed: () {
+                                      // Use the stored context here
+                                      showDialog(
+                                        context: currentContext,
+                                        builder: (dialogContext) => AlertDialog(
+                                          title: const Text('Error Details'),
+                                          content: SingleChildScrollView(
+                                            child: Text(e.toString()),
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(dialogContext),
+                                              child: const Text('Close'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              );
+                            }
                           }
                         } finally {
                           if (mounted) {
@@ -295,7 +393,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
               final deviceId = web3.activeAuctions.keys.elementAt(index);
               final auction = web3.activeAuctions[deviceId]!;
               
-              // Skip inactive auctions
+              // Skip if auction data is invalid
               if (auction['endTime'] == null) {
                 return const SizedBox.shrink();
               }
@@ -306,11 +404,13 @@ class _AuctionScreenState extends State<AuctionScreen> {
                 (endTimeBigInt.toInt() * 1000)
               );
               final hasEnded = now.isAfter(endTime);
+              final isActive = auction['active'] as bool? ?? false;
+              final isFinalized = auction['finalized'] as bool? ?? false;
               final hasControl = auction['highestBidder'] == web3.currentAddress;
               final owner = auction['owner'];  
               final highestBid = auction['highestBid'] as BigInt;
               final highestBidder = auction['highestBidder'];
-              final minBid = auction['minBid'] as BigInt;
+              final minBid = auction['minBid'] as BigInt? ?? BigInt.zero;
 
               return Card(
                 margin: const EdgeInsets.all(8.0),
@@ -327,16 +427,38 @@ class _AuctionScreenState extends State<AuctionScreen> {
                         Text(
                           'Current Bid: ${_formatEther(highestBid)} ETH by ${_formatAddress(highestBidder)}',
                         ),
+                      const SizedBox(height: 8),
+                      // Status indicator
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: isActive 
+                              ? Colors.green.shade100 
+                              : (isFinalized ? Colors.blue.shade100 : Colors.orange.shade100),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          isActive 
+                              ? 'Active' 
+                              : (isFinalized ? 'Finalized' : 'Ended'),
+                          style: TextStyle(
+                            color: isActive 
+                                ? Colors.green.shade800 
+                                : (isFinalized ? Colors.blue.shade800 : Colors.orange.shade800),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 16),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          if (!hasEnded)
+                          if (isActive && !hasEnded)
                             ElevatedButton(
                               onPressed: () => _showBidDialog(context, web3, deviceId, auction),
                               child: const Text('Place Bid'),
                             ),
-                          if (hasEnded && !auction['finalized'])
+                          if (hasEnded && !isFinalized)
                             ElevatedButton(
                               onPressed: () => _finalizeAuction(web3, deviceId),
                               child: const Text('Finalize Auction'),
@@ -394,7 +516,6 @@ class _AuctionScreenState extends State<AuctionScreen> {
       }
       
       setState(() {
-        _isConnected = true;
         _isLoading = false;
       });
     } catch (e) {
@@ -411,27 +532,36 @@ class _AuctionScreenState extends State<AuctionScreen> {
     String deviceId,
     Map<String, dynamic> auction,
   ) async {
-    String bidAmount = '';
-    final currentBid = auction['highestBid'] as BigInt;
-    final minBid = auction['minBid'] as BigInt;
-    final minRequired = currentBid > BigInt.zero ? currentBid : minBid;
-
-    await showDialog(
+    final TextEditingController bidController = TextEditingController();
+    final highestBid = auction['highestBid'] as BigInt;
+    final minRequired = highestBid > BigInt.zero 
+        ? highestBid + BigInt.one // Minimum increment of 1 wei
+        : auction['minBid'] as BigInt? ?? BigInt.zero;
+    
+    // Convert wei to ETH for display
+    final minRequiredEth = minRequired.toDouble() / 1e18;
+    bidController.text = minRequiredEth.toStringAsFixed(4);
+    
+    showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Place Bid'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Current Highest Bid: ${_formatEther(currentBid)} ETH'),
-            Text('Minimum Required: ${_formatEther(minRequired)} ETH'),
+            Text('Device ID: $deviceId'),
+            const SizedBox(height: 8),
+            Text('Current highest bid: ${_formatEther(highestBid)} ETH'),
+            const SizedBox(height: 8),
+            Text('Minimum required bid: ${_formatEther(minRequired)} ETH'),
+            const SizedBox(height: 16),
             TextField(
+              controller: bidController,
               decoration: const InputDecoration(
-                labelText: 'Bid Amount (ETH)',
-                hintText: '0.1',
+                labelText: 'Your Bid (ETH)',
+                border: OutlineInputBorder(),
               ),
-              keyboardType: TextInputType.number,
-              onChanged: (value) => bidAmount = value,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
             ),
           ],
         ),
@@ -443,18 +573,33 @@ class _AuctionScreenState extends State<AuctionScreen> {
           ElevatedButton(
             onPressed: () async {
               try {
-                final amount = BigInt.from(
-                  double.parse(bidAmount) * 1e18,
-                );
-                if (amount <= minRequired) {
+                final amount = double.parse(bidController.text);
+                if (amount <= minRequiredEth) {
                   throw Exception('Bid too low');
                 }
                 await web3.placeBid(deviceId, amount);
-                if (mounted) Navigator.pop(context);
-              } catch (e) {
                 if (mounted) {
+                  Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error: $e')),
+                    const SnackBar(
+                      content: Text('Bid placed successfully!'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } catch (e) {
+                String errorMsg = e.toString();
+                if (errorMsg.startsWith('Exception: ')) {
+                  errorMsg = errorMsg.substring('Exception: '.length);
+                }
+                
+                if (mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Error: $errorMsg'),
+                      backgroundColor: Colors.red,
+                    ),
                   );
                 }
               }
@@ -510,11 +655,161 @@ class _AuctionScreenState extends State<AuctionScreen> {
     return ethValue.toStringAsFixed(4);
   }
 
-  BigInt _toWei(double eth) {
-    return BigInt.from(eth * 1e18);
-  }
-
   void _log(String message) {
     developer.log('AuctionScreen: $message');
+  }
+
+  void _showNetworkStatus() async {
+    final web3Service = context.read<Web3Service>();
+    
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        title: Text('Checking Network Status'),
+        content: SizedBox(
+          height: 100,
+          child: Center(
+            child: CircularProgressIndicator(),
+          ),
+        ),
+      ),
+    );
+    
+    try {
+      // Get network status
+      final status = await web3Service.checkNetworkStatus();
+      
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+      
+      // Format the status information for display
+      final formattedStatus = StringBuffer();
+      formattedStatus.writeln('📊 Blockchain Status Report:');
+      formattedStatus.writeln('');
+      
+      // Connection status
+      final bool connected = status['connected'] ?? false;
+      final bool mockMode = status['mockMode'] ?? false;
+      
+      if (mockMode) {
+        formattedStatus.writeln('🔶 Running in MOCK MODE (no blockchain)');
+        formattedStatus.writeln('');
+      } else if (connected) {
+        formattedStatus.writeln('✅ Connected to blockchain');
+      } else {
+        formattedStatus.writeln('❌ Not connected to blockchain');
+        if (status['error'] != null) {
+          formattedStatus.writeln('Error: ${status['error']}');
+        }
+        formattedStatus.writeln('');
+      }
+      
+      // Network information
+      if (status['networkName'] != null) {
+        formattedStatus.writeln('🌐 Network: ${status['networkName']} (Chain ID: ${status['chainId']})');
+      }
+      
+      // Account information
+      if (status['account'] != null) {
+        final account = status['account'] as String;
+        final shortAccount = '${account.substring(0, 6)}...${account.substring(account.length - 4)}';
+        formattedStatus.writeln('👤 Account: $shortAccount');
+      }
+      
+      // Contract information
+      if (status['contractAddress'] != null) {
+        final contractAddress = status['contractAddress'] as String;
+        final shortContract = '${contractAddress.substring(0, 6)}...${contractAddress.substring(contractAddress.length - 4)}';
+        formattedStatus.writeln('📝 Contract: $shortContract');
+        
+        if (status['contractResponsive'] == true) {
+          formattedStatus.writeln('✅ Contract is responsive');
+          formattedStatus.writeln('📊 Auction Count: ${status['auctionCount']}');
+        } else {
+          formattedStatus.writeln('❌ Contract is not responsive');
+          if (status['contractError'] != null) {
+            formattedStatus.writeln('Error: ${status['contractError']}');
+          }
+        }
+      }
+      
+      // Gas price
+      if (status['gasPrice'] != null) {
+        formattedStatus.writeln('⛽ Gas Price: ${status['gasPrice']} wei');
+      }
+      
+      // Block number
+      if (status['blockNumber'] != null) {
+        formattedStatus.writeln('🧱 Block Number: ${status['blockNumber']}');
+      }
+      
+      // Show the status dialog
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Network Status'),
+            content: SingleChildScrollView(
+              child: Text(formattedStatus.toString()),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  web3Service.toggleMockMode();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        web3Service.isMockMode
+                            ? 'Switched to mock mode'
+                            : 'Switched to blockchain mode',
+                      ),
+                      backgroundColor: web3Service.isMockMode ? Colors.orange : Colors.blue,
+                    ),
+                  );
+                  _refreshAuctions();
+                },
+                child: Text(
+                  web3Service.isMockMode
+                      ? 'Try Real Blockchain'
+                      : 'Switch to Mock Mode',
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+      
+      // Show error dialog
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Error'),
+            content: Text('Failed to check network status: $e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  void _refreshAuctions() {
+    final web3Service = context.read<Web3Service>();
+    web3Service.loadActiveAuctions();
   }
 }

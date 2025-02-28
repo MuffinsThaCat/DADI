@@ -145,18 +145,13 @@ class HomeScreen extends StatelessWidget {
                     onPressed: () async {
                       try {
                         await web3.initializeContract();
-                        final isValid = await web3.testContract();
+                        bool isValid = await web3.testContract();
                         
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                isValid 
-                                  ? 'Contract initialized and tested successfully' 
-                                  : 'Contract initialized but test failed'
-                              ),
-                              backgroundColor: isValid ? Colors.green : Colors.orange,
-                            ),
+                          _showSnackBar(
+                            context,
+                            isValid ? 'Contract initialized and tested successfully' : 'Contract initialized but test failed',
+                            isValid ? Colors.green : Colors.orange
                           );
                         }
                         
@@ -165,12 +160,7 @@ class HomeScreen extends StatelessWidget {
                         }
                       } catch (e) {
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Error: $e'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
+                          _showSnackBar(context, 'Error: $e', Colors.red);
                         }
                       }
                     },
@@ -185,28 +175,18 @@ class HomeScreen extends StatelessWidget {
                     ),
                     onPressed: () async {
                       try {
-                        final isValid = await web3.testContract();
+                        bool isValid = await web3.testContract();
                         
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                isValid 
-                                  ? 'Contract test successful' 
-                                  : 'Contract test failed'
-                              ),
-                              backgroundColor: isValid ? Colors.green : Colors.red,
-                            ),
+                          _showSnackBar(
+                            context,
+                            isValid ? 'Contract test successful' : 'Contract test failed',
+                            isValid ? Colors.green : Colors.red
                           );
                         }
                       } catch (e) {
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Error: $e'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
+                          _showSnackBar(context, 'Error: $e', Colors.red);
                         }
                       }
                     },
@@ -238,6 +218,18 @@ class HomeScreen extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  void _showSnackBar(BuildContext context, String message, Color backgroundColor) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(color: Colors.white),
+        ),
+        backgroundColor: backgroundColor,
       ),
     );
   }
