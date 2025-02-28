@@ -193,7 +193,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
                 border: OutlineInputBorder(),
               ),
               controller: _minBidController,
-              keyboardType: TextInputType.number,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
               validator: (value) {
                 if (value == null || value.isEmpty) {
                   return 'Please enter a minimum bid';
@@ -257,20 +257,20 @@ class _AuctionScreenState extends State<AuctionScreen> {
                           // Call the contract method
                           try {
                             await web3.createAuction(
-                              deviceId,
-                              _startDate,
-                              _endDate,
-                              minBidEth,
+                              deviceId: deviceId,
+                              startTime: _startDate,
+                              duration: _endDate.difference(_startDate),
+                              minimumBid: minBidEth,
                             );
                             
                             if (mounted) {
                               // Check if we've switched to mock mode during the process
                               if (web3.isMockMode) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Created mock auction due to blockchain connection issues'),
+                                  SnackBar(
+                                    content: const Text('Created mock auction due to blockchain connection issues'),
                                     backgroundColor: Colors.orange,
-                                    duration: Duration(seconds: 5),
+                                    duration: const Duration(seconds: 5),
                                   ),
                                 );
                               } else {
@@ -532,7 +532,6 @@ class _AuctionScreenState extends State<AuctionScreen> {
     String deviceId,
     Map<String, dynamic> auction,
   ) async {
-    final TextEditingController bidController = TextEditingController();
     final highestBid = auction['highestBid'] as BigInt;
     final minRequired = highestBid > BigInt.zero 
         ? highestBid + BigInt.one // Minimum increment of 1 wei
@@ -540,104 +539,120 @@ class _AuctionScreenState extends State<AuctionScreen> {
     
     // Convert wei to ETH for display
     final minRequiredEth = minRequired.toDouble() / 1e18;
-    bidController.text = minRequiredEth.toStringAsFixed(4);
     
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Place Bid'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Device ID: $deviceId'),
-            const SizedBox(height: 8),
-            Text('Current highest bid: ${_formatEther(highestBid)} ETH'),
-            const SizedBox(height: 8),
-            Text('Minimum required bid: ${_formatEther(minRequired)} ETH'),
-            const SizedBox(height: 16),
-            TextField(
-              controller: bidController,
-              decoration: const InputDecoration(
-                labelText: 'Your Bid (ETH)',
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+    final amount = await _showBidDialogNew(context, minRequiredEth);
+    
+    if (amount == null) return;
+    
+    setState(() {
+      _isLoading = true;
+    });
+    
+    try {
+      final result = await web3.placeBidNew(
+        deviceId: deviceId,
+        amount: amount,
+      );
+      
+      if (result.success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Bid placed successfully!'),
+              backgroundColor: Colors.green,
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+          );
+          // Refresh the auction data
+          web3.loadActiveAuctions();
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error: ${result.message}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          setState(() => _isLoading = false);
+        }
+      }
+    } catch (e) {
+      String errorMsg = e.toString();
+      if (errorMsg.startsWith('Exception: ')) {
+        errorMsg = errorMsg.substring('Exception: '.length);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $errorMsg'),
+            backgroundColor: Colors.red,
           ),
-          ElevatedButton(
-            onPressed: () async {
-              try {
-                final amount = double.parse(bidController.text);
-                if (amount <= minRequiredEth) {
-                  throw Exception('Bid too low');
-                }
-                await web3.placeBid(deviceId, amount);
-                if (mounted) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Bid placed successfully!'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                }
-              } catch (e) {
-                String errorMsg = e.toString();
-                if (errorMsg.startsWith('Exception: ')) {
-                  errorMsg = errorMsg.substring('Exception: '.length);
-                }
-                
-                if (mounted) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Error: $errorMsg'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
-              }
-            },
-            child: const Text('Place Bid'),
-          ),
-        ],
-      ),
-    );
+        );
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
+    setState(() {
+      _isLoading = true;
+    });
+    
     try {
-      await web3.finalizeAuction(deviceId);
+      final result = await web3.finalizeAuctionNew(
+        deviceId: deviceId,
+      );
       
-      if (mounted) {
-        final auction = web3.activeAuctions[deviceId];
-        if (auction != null) {
-          final endTimeBigInt = auction['endTime'] as BigInt;
-          final endTime = DateTime.fromMillisecondsSinceEpoch(
-            (endTimeBigInt.toInt() * 1000)
-          );
-          
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => DeviceControlScreen(
-                deviceId: deviceId,
-                endTime: endTime,
-              ),
+      if (result.success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Auction finalized successfully!'),
+              backgroundColor: Colors.green,
             ),
           );
+          
+          // Navigate to device control screen if auction was finalized
+          final auction = web3.activeAuctions[deviceId];
+          if (auction != null) {
+            final endTimeBigInt = auction['endTime'] as BigInt;
+            final endTime = DateTime.fromMillisecondsSinceEpoch(
+              (endTimeBigInt.toInt() * 1000)
+            );
+            
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => DeviceControlScreen(
+                  deviceId: deviceId,
+                  endTime: endTime,
+                ),
+              ),
+            );
+          } else {
+            web3.loadActiveAuctions();
+          }
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error: ${result.message}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          setState(() => _isLoading = false);
         }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
         );
+        setState(() => _isLoading = false);
       }
     }
   }
@@ -666,8 +681,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        title: Text('Checking Network Status'),
+      builder: (context) => AlertDialog(
+        title: const Text('Checking Network Status'),
         content: SizedBox(
           height: 100,
           child: Center(
@@ -811,5 +826,58 @@ class _AuctionScreenState extends State<AuctionScreen> {
   void _refreshAuctions() {
     final web3Service = context.read<Web3Service>();
     web3Service.loadActiveAuctions();
+  }
+
+  Future<double?> _showBidDialogNew(BuildContext context, [double minBid = 0.1]) async {
+    double? bidAmount;
+    
+    return showDialog<double?>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Place a Bid'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Enter bid amount in ETH (minimum ${minBid + 0.01} ETH):'),
+              TextField(
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  hintText: 'e.g., ${(minBid + 0.01).toStringAsFixed(2)}',
+                ),
+                onChanged: (value) {
+                  try {
+                    bidAmount = double.parse(value);
+                  } catch (_) {
+                    bidAmount = null;
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                if (bidAmount != null && bidAmount! > minBid) {
+                  Navigator.pop(context, bidAmount);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Please enter a valid amount greater than $minBid ETH'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Confirm'),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

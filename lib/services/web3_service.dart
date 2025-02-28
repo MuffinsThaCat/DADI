@@ -4,11 +4,19 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web3/flutter_web3.dart';
 import '../contracts/dadi_auction.dart';
+import '../models/auction.dart';
+import '../models/operation_result.dart';
+import '../services/settings_service.dart';
 
 class Web3Service extends ChangeNotifier {
   static final Web3Service _instance = Web3Service._internal();
   
   factory Web3Service() => _instance;
+  
+  factory Web3Service.withSettings({required SettingsService settingsService}) {
+    _instance._settingsService = settingsService;
+    return _instance;
+  }
   
   Web3Service._internal() {
     _log('Initializing Web3Service');
@@ -23,6 +31,7 @@ class Web3Service extends ChangeNotifier {
   Contract? _contract;
   bool _isContractInitialized = false;
   final Map<String, Map<String, dynamic>> _activeAuctions = {};
+  SettingsService? _settingsService;
   
   // RPC URL for local Hardhat node
   final String _localRpcUrl = 'http://localhost:8087';
@@ -32,6 +41,9 @@ class Web3Service extends ChangeNotifier {
   bool get isMockMode => _mockMode;
   set isMockMode(bool value) {
     _mockMode = value;
+    if (_mockMode) {
+      _initializeMockData();
+    }
     notifyListeners();
   }
 
@@ -162,10 +174,10 @@ class Web3Service extends ChangeNotifier {
       }
       
       // Check direct RPC connection
-      _log('Checking direct RPC connection to $_localRpcUrl...');
+      _log('Checking direct RPC connection to ${getRpcUrl()}...');
       
       try {
-        final jsonRpcProvider = JsonRpcProvider(_localRpcUrl);
+        final jsonRpcProvider = JsonRpcProvider(getRpcUrl());
         jsonRpcProvider.getNetwork().then((network) {
           _log('Successfully connected to RPC with network: ${network.name}, chainId: ${network.chainId}');
         }).catchError((e) {
@@ -193,8 +205,8 @@ class Web3Service extends ChangeNotifier {
         _log('Ethereum provider not available, falling back to local RPC');
         
         try {
-          _log('Creating JsonRpcProvider with URL: $_localRpcUrl');
-          _provider = JsonRpcProvider(_localRpcUrl);
+          _log('Creating JsonRpcProvider with URL: ${getRpcUrl()}');
+          _provider = JsonRpcProvider(getRpcUrl());
           _log('JsonRpcProvider created successfully');
           
           // Test the provider by getting the network
@@ -268,12 +280,12 @@ class Web3Service extends ChangeNotifier {
     }
 
     try {
-      _log('Connecting directly with JsonRpcProvider to $_localRpcUrl');
+      _log('Connecting directly with JsonRpcProvider to ${getRpcUrl()}');
       
       try {
         // Create JsonRpcProvider
         _log('Creating JsonRpcProvider');
-        _provider = JsonRpcProvider(_localRpcUrl);
+        _provider = JsonRpcProvider(getRpcUrl());
         _log('JsonRpcProvider created');
         
         // Test the provider by getting the network
@@ -311,6 +323,10 @@ class Web3Service extends ChangeNotifier {
   }
 
   Future<bool> initializeContract() async {
+    if (_isContractInitialized) {
+      return true;
+    }
+
     if (_mockMode) {
       _log('Mock mode enabled, simulating contract initialization');
       await Future.delayed(const Duration(milliseconds: 500)); // Simulate delay
@@ -319,28 +335,21 @@ class Web3Service extends ChangeNotifier {
     }
 
     try {
-      _log('Initializing contract...');
-      
       if (_provider == null) {
-        _log('Provider not initialized');
-        return false;
+        _log('Provider not initialized. Trying to connect...');
+        final connected = await connectWithJsonRpc();
+        if (!connected) {
+          _log('Failed to connect to provider');
+          return false;
+        }
       }
-      
-      _log('Provider type: ${_provider.runtimeType}');
-      
-      try {
-        // Get the network information
-        final network = await _provider!.getNetwork();
-        _log('Connected to network: ${network.name}, chainId: ${network.chainId}');
-      } catch (e) {
-        _log('Error getting network information:', error: e);
-      }
-      
+
       try {
         // Create contract instance
-        _log('Creating contract instance with address: ${DADIAuction.address}');
+        final contractAddress = getContractAddress();
+        _log('Creating contract instance with address: $contractAddress');
         _contract = Contract(
-          DADIAuction.address,
+          contractAddress,
           DADIAuction.abi,
           _provider!,
         );
@@ -427,7 +436,7 @@ class Web3Service extends ChangeNotifier {
     
     try {
       if (_contract == null) {
-        _log('Contract not initialized, cannot load auctions');
+        _log('Contract not initialized');
         return;
       }
       
@@ -520,35 +529,24 @@ class Web3Service extends ChangeNotifier {
 
   /// Convert bytes32 to string
   String _bytesToString(dynamic bytes32) {
-    if (bytes32 is String) {
-      return bytes32;
+    if (bytes32 == null) return '';
+    
+    // Remove '0x' prefix if present
+    String hexString = bytes32.toString();
+    if (hexString.startsWith('0x')) {
+      hexString = hexString.substring(2);
     }
     
-    try {
-      // Remove '0x' prefix if present
-      String hexString = bytes32.toString();
-      if (hexString.startsWith('0x')) {
-        hexString = hexString.substring(2);
+    // Convert hex to bytes
+    List<int> bytes = [];
+    for (int i = 0; i < hexString.length; i += 2) {
+      if (i + 2 <= hexString.length) {
+        bytes.add(int.parse(hexString.substring(i, i + 2), radix: 16));
       }
-      
-      // Convert hex to bytes
-      final List<int> bytes = [];
-      for (int i = 0; i < hexString.length; i += 2) {
-        if (i + 2 <= hexString.length) {
-          final hexPair = hexString.substring(i, i + 2);
-          final byte = int.parse(hexPair, radix: 16);
-          // Stop at the first null byte
-          if (byte == 0) break;
-          bytes.add(byte);
-        }
-      }
-      
-      // Convert bytes to string
-      return utf8.decode(bytes);
-    } catch (e) {
-      _log('Error converting bytes32 to string:', error: e);
-      return bytes32.toString();
     }
+    
+    // Convert bytes to string and trim null bytes
+    return String.fromCharCodes(bytes).replaceAll('\x00', '');
   }
 
   Future<void> placeBid(String deviceId, double amountEth) async {
@@ -612,7 +610,7 @@ class Web3Service extends ChangeNotifier {
       final receipt = await transaction.wait();
       
       // Status 1 means success in Ethereum transactions
-      if (receipt.status == BigInt.from(1)) {
+      if (receipt.status == BigInt.one) {
         _log('Bid placed successfully');
         
         // Update the auction in our local state
@@ -633,20 +631,72 @@ class Web3Service extends ChangeNotifier {
     }
   }
 
-  /// Convert string to bytes32
-  List<int> _stringToBytes32(String str) {
-    final List<int> bytes = utf8.encode(str);
-    if (bytes.length > 32) {
-      throw Exception('Device ID too long: must be 32 bytes or less when encoded as UTF-8');
+  Future<bool> placeBidLegacy(String deviceId, double amountEth) async {
+    if (_mockMode) {
+      // Mock implementation
+      await Future.delayed(const Duration(seconds: 1));
+      return true;
     }
     
-    // Pad to 32 bytes
-    final List<int> bytes32 = List<int>.filled(32, 0);
-    for (int i = 0; i < bytes.length; i++) {
-      bytes32[i] = bytes[i];
+    try {
+      await _placeBidReal(deviceId, amountEth);
+      return true;
+    } catch (e) {
+      return false;
     }
+  }
+
+  Future<void> _placeBidReal(String deviceId, double bidEth) async {
+    _log('Placing bid of $bidEth ETH on device: $deviceId');
     
-    return bytes32;
+    try {
+      if (_contract == null) {
+        _log('Contract not initialized');
+        throw Exception('Contract not initialized');
+      }
+      
+      // Convert deviceId to bytes32
+      final bytes32DeviceId = _stringToBytes32(deviceId);
+      
+      // Convert ETH to wei
+      final bidWei = _toWei(bidEth);
+      
+      _log('Placing bid with parameters: deviceId: $deviceId (bytes32: $bytes32DeviceId), bid: $bidEth ETH (${bidWei.toString()} wei)');
+      
+      // Call the contract method
+      final transaction = await _contract!.send(
+        'placeBid',
+        [bytes32DeviceId],
+        TransactionOverride(
+          value: bidWei,
+        ),
+      );
+      
+      _log('Transaction sent: ${transaction.hash}');
+      
+      // Wait for transaction to be mined
+      final receipt = await transaction.wait();
+      
+      // Status 1 means success in Ethereum transactions
+      if (receipt.status == BigInt.one) {
+        _log('Bid placed successfully');
+        
+        // Update the auction in our local state
+        if (_activeAuctions.containsKey(deviceId)) {
+          _activeAuctions[deviceId]!['highestBid'] = bidWei;
+          _activeAuctions[deviceId]!['highestBidder'] = _currentAddress;
+        }
+      } else {
+        _log('Transaction failed');
+        throw Exception('Transaction failed');
+      }
+      
+      // Refresh auctions after bid
+      await _refreshAuctions();
+    } catch (e) {
+      _log('Error placing bid:', error: e);
+      rethrow;
+    }
   }
 
   Future<void> finalizeAuction(String deviceId) async {
@@ -701,7 +751,7 @@ class Web3Service extends ChangeNotifier {
       final receipt = await transaction.wait();
       
       // Status 1 means success in Ethereum transactions
-      if (receipt.status == BigInt.from(1)) {
+      if (receipt.status == BigInt.one) {
         _log('Auction finalized successfully');
         
         // Update the auction in our local state
@@ -720,6 +770,84 @@ class Web3Service extends ChangeNotifier {
       _log('Error finalizing auction:', error: e);
       throw Exception('Failed to finalize auction: $e');
     }
+  }
+
+  Future<bool> finalizeAuctionLegacy(String deviceId) async {
+    if (_mockMode) {
+      // Mock implementation
+      await Future.delayed(const Duration(seconds: 1));
+      return true;
+    }
+    
+    try {
+      await _finalizeAuctionReal(deviceId);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<void> _finalizeAuctionReal(String deviceId) async {
+    _log('Finalizing auction for device: $deviceId');
+    
+    try {
+      if (_contract == null) {
+        _log('Contract not initialized');
+        throw Exception('Contract not initialized');
+      }
+      
+      // Convert deviceId to bytes32
+      final bytes32DeviceId = _stringToBytes32(deviceId);
+      
+      _log('Finalizing auction with parameters: deviceId: $deviceId (bytes32: $bytes32DeviceId)');
+      
+      // Call the contract method
+      final transaction = await _contract!.send(
+        'finalizeAuction',
+        [bytes32DeviceId],
+      );
+      
+      _log('Transaction sent: ${transaction.hash}');
+      
+      // Wait for transaction to be mined
+      final receipt = await transaction.wait();
+      
+      // Status 1 means success in Ethereum transactions
+      if (receipt.status == BigInt.one) {
+        _log('Auction finalized successfully');
+        
+        // Update the auction in our local state
+        if (_activeAuctions.containsKey(deviceId)) {
+          _activeAuctions[deviceId]!['active'] = false;
+          _activeAuctions[deviceId]!['finalized'] = true;
+        }
+      } else {
+        _log('Transaction failed');
+        throw Exception('Transaction failed');
+      }
+      
+      // Refresh auctions after finalization
+      await _refreshAuctions();
+    } catch (e) {
+      _log('Error finalizing auction:', error: e);
+      rethrow;
+    }
+  }
+  
+  /// Convert string to bytes32
+  List<int> _stringToBytes32(String str) {
+    final List<int> bytes = utf8.encode(str);
+    if (bytes.length > 32) {
+      throw Exception('Device ID too long: must be 32 bytes or less when encoded as UTF-8');
+    }
+    
+    // Pad to 32 bytes
+    final List<int> bytes32 = List<int>.filled(32, 0);
+    for (int i = 0; i < bytes.length; i++) {
+      bytes32[i] = bytes[i];
+    }
+    
+    return bytes32;
   }
 
   Future<bool> testContract() async {
@@ -789,37 +917,215 @@ class Web3Service extends ChangeNotifier {
   
   /// Check if MetaMask is installed and available
   Future<bool> isMetaMaskAvailable() async {
+    if (isMockMode) return true;
+    
     try {
-      _log('Checking MetaMask availability');
-      
-      if (!Ethereum.isSupported) {
-        _log('Ethereum is not supported in this browser');
-        return false;
-      }
-      
-      if (ethereum == null) {
-        _log('Ethereum provider is null');
-        return false;
-      }
-      
-      // Try to access ethereum.isMetaMask, but this might not be available
-      // Instead, check if we can request accounts, which is a common MetaMask capability
-      try {
-        _log('Attempting to request accounts to check MetaMask...');
-        // We can't directly access isMetaMask property, so we'll check indirectly
-        final metaMaskAvailable = await ethereum!.requestAccount();
-        _log('Successfully requested accounts: ${metaMaskAvailable.length} accounts found');
-        return metaMaskAvailable.isNotEmpty;
-      } catch (e) {
-        _log('Error requesting accounts:', error: e);
-        return false;
-      }
+      return ethereum != null;
     } catch (e) {
-      _log('Error checking MetaMask availability:', error: e);
+      _log('Error checking MetaMask availability: $e');
       return false;
     }
   }
 
+  // Create a new auction
+  Future<OperationResult<Auction>> createAuction({
+    required String deviceId,
+    required DateTime startTime,
+    required Duration duration,
+    required double minimumBid,
+  }) async {
+    _log('Creating auction for device: $deviceId');
+    
+    try {
+      if (isMockMode) {
+        // Mock implementation
+        final endTime = startTime.add(duration);
+        
+        _activeAuctions[deviceId] = {
+          'deviceId': deviceId,
+          'owner': '0xMockOwner${DateTime.now().millisecondsSinceEpoch}',
+          'startTime': startTime,
+          'endTime': BigInt.from(endTime.millisecondsSinceEpoch ~/ 1000),
+          'minimumBid': minimumBid,
+          'highestBid': BigInt.from(0),
+          'highestBidder': '0x0000000000000000000000000000000000000000',
+          'active': true,
+          'finalized': false,
+        };
+        
+        notifyListeners();
+        
+        final auction = Auction.fromBlockchainData(_activeAuctions[deviceId]!);
+        return OperationResult.success(
+          data: auction,
+          message: 'Auction created successfully (Mock)',
+        );
+      } else {
+        // Call the real implementation
+        await _createAuctionReal(
+          deviceId: deviceId,
+          startTime: startTime,
+          duration: duration,
+          minBidEth: minimumBid,
+        );
+        
+        // For real implementation, we would fetch the auction details
+        // but for now, just return a success message
+        return OperationResult.success(
+          message: 'Auction creation transaction submitted',
+        );
+      }
+    } catch (e) {
+      _log('Error creating auction: $e', error: e);
+      return OperationResult.failure(message: 'Failed to create auction: ${e.toString()}');
+    }
+  }
+  
+  // Get auction details
+  Future<OperationResult<Auction>> getAuction({required String deviceId}) async {
+    _log('Getting auction for device: $deviceId');
+    
+    try {
+      if (isMockMode) {
+        // Mock implementation
+        if (!_activeAuctions.containsKey(deviceId)) {
+          return OperationResult.failure(message: 'Auction not found for device: $deviceId');
+        }
+        
+        final auction = Auction.fromBlockchainData(_activeAuctions[deviceId]!);
+        return OperationResult.success(
+          data: auction,
+          message: 'Auction retrieved successfully (Mock)',
+        );
+      }
+      
+      // Real implementation would go here
+      // ...
+      
+      return OperationResult.failure(message: 'Real blockchain implementation not available');
+    } catch (e) {
+      _log('Error getting auction: $e', error: e);
+      return OperationResult.failure(message: 'Failed to get auction: ${e.toString()}');
+    }
+  }
+  
+  // Place a bid on an auction
+  Future<OperationResult<double>> placeBidNew({
+    required String deviceId,
+    required double amount,
+  }) async {
+    _log('Placing bid of $amount ETH on device: $deviceId');
+    
+    try {
+      if (isMockMode) {
+        // Mock implementation
+        if (!_activeAuctions.containsKey(deviceId)) {
+          return OperationResult.failure(message: 'Auction not found for device: $deviceId');
+        }
+        
+        final auction = _activeAuctions[deviceId]!;
+        final now = DateTime.now();
+        final startTime = auction['startTime'] is DateTime 
+            ? auction['startTime'] as DateTime
+            : DateTime.fromMillisecondsSinceEpoch((auction['startTime'] as BigInt).toInt() * 1000);
+        
+        final endTime = DateTime.fromMillisecondsSinceEpoch(
+            (auction['endTime'] as BigInt).toInt() * 1000);
+        
+        // Check if auction is active
+        if (now.isBefore(startTime)) {
+          return OperationResult.failure(message: 'Auction has not started yet');
+        }
+        
+        if (now.isAfter(endTime)) {
+          return OperationResult.failure(message: 'Auction has already ended');
+        }
+        
+        // Check if bid is higher than current highest bid
+        final highestBidWei = auction['highestBid'] as BigInt;
+        final highestBidEth = highestBidWei.toDouble() / 1e18;
+        
+        if (amount <= highestBidEth) {
+          return OperationResult.failure(
+            message: 'Bid must be higher than current highest bid of $highestBidEth ETH',
+          );
+        }
+        
+        // Update the auction
+        auction['highestBid'] = BigInt.from((amount * 1e18).toInt());
+        auction['highestBidder'] = '0xMockBidder${DateTime.now().millisecondsSinceEpoch}';
+        
+        notifyListeners();
+        
+        return OperationResult.success(
+          data: amount,
+          message: 'Bid placed successfully (Mock)',
+        );
+      } else {
+        // Call the real implementation
+        await _placeBidReal(deviceId, amount);
+        
+        // For real implementation, we would fetch the updated auction details
+        // but for now, just return a success message
+        return OperationResult.success(
+          data: amount,
+          message: 'Bid transaction submitted',
+        );
+      }
+    } catch (e) {
+      _log('Error placing bid: $e', error: e);
+      return OperationResult.failure(message: 'Failed to place bid: ${e.toString()}');
+    }
+  }
+  
+  // Finalize an auction
+  Future<OperationResult<bool>> finalizeAuctionNew({required String deviceId}) async {
+    _log('Finalizing auction for device: $deviceId');
+    
+    try {
+      if (isMockMode) {
+        // Mock implementation
+        if (!_activeAuctions.containsKey(deviceId)) {
+          return OperationResult.failure(message: 'Auction not found for device: $deviceId');
+        }
+        
+        final auction = _activeAuctions[deviceId]!;
+        final now = DateTime.now();
+        final endTime = DateTime.fromMillisecondsSinceEpoch(
+            (auction['endTime'] as BigInt).toInt() * 1000);
+        
+        // Check if auction has ended
+        if (now.isBefore(endTime)) {
+          return OperationResult.failure(message: 'Auction has not ended yet');
+        }
+        
+        // Update the auction
+        auction['active'] = false;
+        auction['finalized'] = true;
+        
+        notifyListeners();
+        
+        return OperationResult.success(
+          data: true,
+          message: 'Auction finalized successfully (Mock)',
+        );
+      } else {
+        // Call the real implementation
+        await _finalizeAuctionReal(deviceId);
+        
+        // For real implementation, we would fetch the updated auction details
+        // but for now, just return a success message
+        return OperationResult.success(
+          data: true,
+          message: 'Finalization transaction submitted',
+        );
+      }
+    } catch (e) {
+      _log('Error finalizing auction: $e', error: e);
+      return OperationResult.failure(message: 'Failed to finalize auction: ${e.toString()}');
+    }
+  }
+  
   /// Checks the current blockchain network status
   /// Returns a map with network information or error details
   Future<Map<String, dynamic>> checkNetworkStatus() async {
@@ -845,11 +1151,11 @@ class Web3Service extends ChangeNotifier {
         result['supported'] = true;
         result['message'] = 'Using direct RPC connection (no wallet)';
         result['providerType'] = 'JsonRpcProvider';
-        result['rpcUrl'] = _localRpcUrl;
+        result['rpcUrl'] = getRpcUrl();
         
         // Check if we can connect to the RPC endpoint
         try {
-          final provider = JsonRpcProvider(_localRpcUrl);
+          final provider = JsonRpcProvider(getRpcUrl());
           final network = await provider.getNetwork();
           result['connected'] = true;
           result['chainId'] = network.chainId;
@@ -961,32 +1267,13 @@ class Web3Service extends ChangeNotifier {
     }
   }
 
-  Future<void> createAuction(String deviceId, DateTime startTime, DateTime endTime, double minBidEth) async {
+  Future<void> _createAuctionReal({
+    required String deviceId,
+    required DateTime startTime,
+    required Duration duration,
+    required double minBidEth,
+  }) async {
     _log('Creating auction for device: $deviceId, name: $deviceId');
-    
-    if (_mockMode) {
-      _log('Mock mode enabled, simulating auction creation');
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate delay
-      
-      // Convert ETH to wei
-      final minBidWei = _toWei(minBidEth);
-      
-      // Create a new mock auction
-      _activeAuctions[deviceId] = {
-        'deviceId': deviceId,
-        'owner': _currentAddress ?? '0xMockOwner123456789',
-        'startTime': startTime,
-        'endTime': endTime,
-        'minBid': minBidWei,
-        'highestBid': BigInt.zero,
-        'highestBidder': '0x0000000000000000000000000000000000000000', // No bidder yet
-        'active': true,
-        'finalized': false,
-      };
-      
-      notifyListeners();
-      return;
-    }
     
     try {
       if (_contract == null) {
@@ -994,53 +1281,60 @@ class Web3Service extends ChangeNotifier {
         throw Exception('Contract not initialized');
       }
       
-      if (_currentAddress == null) {
-        _log('No wallet connected');
-        throw Exception('No wallet connected');
-      }
-      
       // Convert deviceId to bytes32
       final bytes32DeviceId = _stringToBytes32(deviceId);
+      _log('Converted deviceId to bytes32: $bytes32DeviceId');
       
       // Convert start and end times to Unix timestamps (seconds since epoch)
       final startTimestamp = BigInt.from(startTime.millisecondsSinceEpoch ~/ 1000);
-      final duration = BigInt.from((endTime.millisecondsSinceEpoch - startTime.millisecondsSinceEpoch) ~/ 1000);
+      final durationSeconds = BigInt.from(duration.inSeconds);
       
       // Convert ETH to wei
       final minBidWei = _toWei(minBidEth);
       
-      _log('Creating auction with parameters: deviceId: $deviceId (bytes32: $bytes32DeviceId), start time: $startTime, end time: $endTime, min bid: $minBidEth ETH (${minBidWei.toString()} wei)');
+      _log('Creating auction with parameters: deviceId: $deviceId (bytes32: $bytes32DeviceId), start time: $startTime, end time: ${startTime.add(duration)}, min bid: $minBidEth ETH (${minBidWei.toString()} wei)');
       
       // Call the contract method
       final transaction = await _contract!.send(
         'createAuction',
-        [bytes32DeviceId, startTimestamp, duration, minBidWei],
+        [bytes32DeviceId, startTimestamp, durationSeconds, minBidWei],
       );
       
       _log('Transaction sent: ${transaction.hash}');
       
       // Wait for transaction to be mined
       final receipt = await transaction.wait();
+      _log('Transaction mined: ${receipt.toString()}');
       
-      // Status 1 means success in Ethereum transactions
-      if (receipt.status == BigInt.from(1)) {
-        _log('Auction created successfully');
-        
-        // Refresh auctions list
-        await loadActiveAuctions();
-      } else {
-        _log('Transaction failed');
-        throw Exception('Transaction failed');
-      }
+      // Refresh auctions after creation
+      await _refreshAuctions();
     } catch (e) {
       _log('Error creating auction:', error: e);
-      throw Exception('Failed to create auction: $e');
+      rethrow;
     }
   }
 
-  // Helper method to convert ETH to wei
+  Future<void> _refreshAuctions() async {
+    await loadActiveAuctions();
+  }
+
+  /// Helper method to convert ETH to wei
   BigInt _toWei(double ethAmount) {
     // 1 ETH = 10^18 wei
     return BigInt.from(ethAmount * 1e18);
+  }
+
+  void initializeWithSettings(SettingsService settingsService) {
+    _settingsService = settingsService;
+    _mockMode = settingsService.getUseMockBlockchain();
+    notifyListeners();
+  }
+  
+  String getRpcUrl() {
+    return _settingsService?.getRpcUrl() ?? _localRpcUrl;
+  }
+  
+  String getContractAddress() {
+    return _settingsService?.getContractAddress() ?? DADIAuction.address;
   }
 }
