@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart';
+import 'package:pointycastle/digests/keccak.dart';
 
 /// Utility class for encryption and decryption operations
 class CryptoUtils {
@@ -61,5 +62,14 @@ class CryptoUtils {
   static bool verifyPassword(String password, String hash) {
     final passwordHash = hashPassword(password);
     return passwordHash == hash;
+  }
+  
+  /// Compute the Keccak-256 hash of the input
+  static Uint8List keccak256(Uint8List input) {
+    final keccak = KeccakDigest(256);
+    final result = Uint8List(32); // 256 bits = 32 bytes
+    keccak.update(input, 0, input.length);
+    keccak.doFinal(result, 0);
+    return result;
   }
 }
