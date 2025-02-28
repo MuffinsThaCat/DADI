@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/web3_service.dart';
 import '../services/mock_buttplug_service.dart';
 import 'device_control_screen.dart';
+import '../widgets/wavy_background.dart'; // Import wavy background
 
 class AuctionScreen extends StatefulWidget {
   final int initialTab;
@@ -47,8 +48,9 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final web3 = context.watch<Web3Service>();
-    final buttplug = context.watch<MockButtplugService>();
+    final web3 = Provider.of<Web3Service>(context);
+    final buttplug = Provider.of<MockButtplugService>(context);
+    final theme = Theme.of(context);
     final isConnected = web3.isConnected;
     final isMockMode = web3.isMockMode;
 
@@ -95,11 +97,15 @@ class _AuctionScreenState extends State<AuctionScreen> {
             ],
           ),
         ),
-        body: TabBarView(
-          children: [
-            _buildCreateAuctionTab(web3, buttplug),
-            _buildActiveAuctionsTab(web3),
-          ],
+        body: WavyBackground(
+          primaryColor: theme.colorScheme.primary,
+          secondaryColor: theme.colorScheme.secondary,
+          child: TabBarView(
+            children: [
+              _buildCreateAuctionTab(web3, buttplug),
+              _buildActiveAuctionsTab(web3),
+            ],
+          ),
         ),
       ),
     );

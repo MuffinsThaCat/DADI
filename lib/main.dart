@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/web3_service.dart';
 import 'services/mock_buttplug_service.dart';
-import 'screens/home_screen.dart';
+import 'services/wallet_service_interface.dart';
+import 'services/wallet_service_factory.dart';
+import 'screens/home_screen_new.dart';
 import 'dart:developer' as developer;
+import 'theme/app_theme.dart';
 
 // Helper function for logging
 void _log(String message, {Object? error}) {
@@ -25,6 +28,10 @@ void main() async {
 
   // Initialize Web3Service
   final web3Service = Web3Service();
+  
+  // Initialize WalletService
+  final walletService = WalletServiceFactory.createWalletService();
+  _log('Wallet service initialized');
   
   // Check Ethereum provider status
   _log('Checking Ethereum provider status...');
@@ -92,28 +99,34 @@ void main() async {
     });
   });
   
-  runApp(MyApp(web3Service: web3Service));
+  runApp(MyApp(
+    web3Service: web3Service,
+    walletService: walletService,
+  ));
 }
 
 class MyApp extends StatelessWidget {
   final Web3Service web3Service;
+  final WalletServiceInterface walletService;
   
-  const MyApp({super.key, required this.web3Service});
+  const MyApp({
+    super.key, 
+    required this.web3Service,
+    required this.walletService,
+  });
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: web3Service),
+        ChangeNotifierProvider.value(value: walletService),
         ChangeNotifierProvider(create: (_) => MockButtplugService()),
       ],
       child: MaterialApp(
         title: 'DADI',
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-          useMaterial3: true,
-        ),
-        home: const HomeScreen(),
+        theme: AppTheme.lightTheme, // Use our new theme
+        home: const HomeScreenNew(), // Update the home screen
       ),
     );
   }

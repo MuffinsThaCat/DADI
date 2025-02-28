@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'dart:convert'; 
 import 'package:flutter/foundation.dart';
 import '../models/auction.dart';
 import '../models/operation_result.dart';
@@ -30,6 +29,9 @@ class Web3Service extends ChangeNotifier implements Web3ServiceInterface {
   void _initialize(SettingsService settingsService) {
     _settingsService = settingsService;
     _implementation = Web3ServiceFactory.create(settingsService: settingsService);
+    
+    // Log the current environment
+    _log('Initialized with RPC URL: ${_settingsService.getRpcUrl()}');
     
     // Forward change notifications from implementation
     _implementation.addListener(() {

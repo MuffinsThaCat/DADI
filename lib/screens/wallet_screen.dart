@@ -5,6 +5,7 @@ import '../services/wallet_service_factory.dart';
 import '../widgets/wallet_create_widget.dart';
 import '../widgets/wallet_import_widget.dart';
 import '../widgets/wallet_details_widget.dart';
+import '../widgets/wavy_background.dart';
 
 /// Screen for wallet management
 class WalletScreen extends StatefulWidget {
@@ -63,54 +64,113 @@ class _WalletScreenState extends State<WalletScreen> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
     return ChangeNotifierProvider.value(
       value: _walletService,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('DADI Wallet'),
+          title: const Text(
+            'DADI Wallet',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+          centerTitle: true,
+          elevation: 0,
           bottom: _walletExists
               ? null
               : TabBar(
                   controller: _tabController,
                   tabs: const [
-                    Tab(text: 'Create Wallet'),
-                    Tab(text: 'Import Wallet'),
+                    Tab(
+                      text: 'Create Wallet',
+                      icon: Icon(Icons.add_circle_outline),
+                    ),
+                    Tab(
+                      text: 'Import Wallet',
+                      icon: Icon(Icons.file_download_outlined),
+                    ),
                   ],
+                  indicatorColor: theme.colorScheme.primary,
+                  labelColor: theme.colorScheme.primary,
+                  unselectedLabelColor: theme.colorScheme.onSurface.withOpacity(0.7),
+                  indicatorWeight: 3,
+                  labelStyle: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
                 ),
         ),
-        body: _buildBody(),
+        body: SafeArea(
+          child: _buildBody(),
+        ),
       ),
     );
   }
 
   Widget _buildBody() {
+    final theme = Theme.of(context);
+    
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(),
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              color: theme.colorScheme.primary,
+              strokeWidth: 3,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Loading wallet...',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ],
+        ),
       );
     }
 
     if (_walletExists) {
       return const WalletDetailsWidget();
     } else {
-      return TabBarView(
-        controller: _tabController,
-        children: [
-          WalletCreateWidget(
-            onWalletCreated: () {
-              setState(() {
-                _walletExists = true;
-              });
-            },
+      return WavyBackground(
+        primaryColor: theme.colorScheme.primary,
+        secondaryColor: theme.colorScheme.secondary,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                theme.colorScheme.surface.withOpacity(0.8),
+                theme.colorScheme.surfaceVariant.withOpacity(0.3),
+              ],
+            ),
           ),
-          WalletImportWidget(
-            onWalletImported: () {
-              setState(() {
-                _walletExists = true;
-              });
-            },
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              WalletCreateWidget(
+                onWalletCreated: () {
+                  setState(() {
+                    _walletExists = true;
+                  });
+                },
+              ),
+              WalletImportWidget(
+                onWalletImported: () {
+                  setState(() {
+                    _walletExists = true;
+                  });
+                },
+              ),
+            ],
           ),
-        ],
+        ),
       );
     }
   }

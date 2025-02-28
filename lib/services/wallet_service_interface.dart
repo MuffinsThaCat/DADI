@@ -44,6 +44,12 @@ abstract class WalletServiceInterface extends ChangeNotifier {
   /// Export private key (requires password)
   Future<String> exportPrivateKey({required String password});
   
+  /// Get mnemonic phrase (requires wallet to be unlocked)
+  Future<String?> getMnemonic();
+  
+  /// Get private key (requires wallet to be unlocked)
+  Future<String?> getPrivateKey();
+  
   /// Send ETH to address
   Future<String> sendTransaction({
     required String toAddress,
@@ -64,4 +70,12 @@ abstract class WalletServiceInterface extends ChangeNotifier {
   
   /// Reset wallet (delete all data)
   Future<void> resetWallet();
+  
+  /// Sign a message with the wallet's private key
+  /// Returns the signature as a hex string
+  Future<String> signMessage({required String message});
+  
+  /// Sign typed data according to EIP-712 standard
+  /// Returns the signature as a hex string
+  Future<String> signTypedData({required Map<String, dynamic> typedData});
 }

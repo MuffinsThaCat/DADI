@@ -5,6 +5,7 @@ import '../services/mock_buttplug_service.dart';
 import 'auction_screen.dart';
 import 'auction_list_screen.dart';
 import 'settings_screen.dart';
+import 'wallet_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -59,38 +60,66 @@ class HomeScreen extends StatelessWidget {
                       ),
                       SizedBox(height: 20),
                       Text(
-                        'Connect your wallet to get started',
-                        style: TextStyle(fontSize: 16),
+                        'Connect your wallet and device to get started',
+                        textAlign: TextAlign.center,
                       ),
                     ],
                   ),
-                if (web3.isConnected && !buttplug.isConnected)
-                  const Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        'Wallet Connected',
-                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                      ),
-                      SizedBox(height: 20),
-                      Text(
-                        'Connect your device to continue',
-                        style: TextStyle(fontSize: 16),
-                      ),
-                    ],
-                  ),
-                if (!web3.isConnected)
+                if (!web3.isConnected) ...[
+                  const SizedBox(height: 32),
                   ElevatedButton.icon(
                     icon: const Icon(Icons.account_balance_wallet),
                     label: const Text('Connect Wallet'),
                     onPressed: web3.connect,
                   ),
-                if (!buttplug.isConnected) ...[
                   const SizedBox(height: 16),
                   ElevatedButton.icon(
                     icon: const Icon(Icons.bluetooth),
                     label: const Text('Connect Device'),
                     onPressed: buttplug.connect,
+                  ),
+                ],
+                if (web3.isConnected) ...[
+                  // Wallet management section
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 24),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceVariant,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.account_balance_wallet,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Wallet',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                            const Spacer(),
+                            TextButton.icon(
+                              icon: const Icon(Icons.arrow_forward),
+                              label: const Text('Manage'),
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) => const WalletScreen(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ],
                 if (web3.isConnected && buttplug.isConnected) ...[
@@ -218,6 +247,51 @@ class HomeScreen extends StatelessWidget {
             ),
           ),
         ),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: 0, // Home is selected
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.account_balance_wallet),
+            label: 'Wallet',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.gavel),
+            label: 'Auctions',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
+        ],
+        onTap: (index) {
+          if (index == 0) {
+            // Already on home
+          } else if (index == 1) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => const WalletScreen(),
+              ),
+            );
+          } else if (index == 2) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => const AuctionListScreen(),
+              ),
+            );
+          } else if (index == 3) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => const SettingsScreen(),
+              ),
+            );
+          }
+        },
       ),
     );
   }
