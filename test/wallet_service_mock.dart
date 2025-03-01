@@ -2,6 +2,14 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:dadi/services/wallet_service_interface.dart';
 
+/// Transaction status enum for mock service
+enum MockTransactionStatus {
+  pending,
+  confirmed,
+  failed,
+  dropped
+}
+
 /// Mock implementation of WalletService for testing
 class MockWalletService extends WalletServiceInterface {
   String? _currentAddress;
@@ -15,36 +23,74 @@ class MockWalletService extends WalletServiceInterface {
   // Completer to control when delayed operations complete
   final Completer<void> _delayCompleter = Completer<void>();
   
+  // Map to track transaction status changes
+  final Map<String, MockTransactionStatus> _transactionStatuses = {};
+  
+  // Transaction status update callbacks for testing
+  final Map<String, Function(String, MockTransactionStatus)> _statusCallbacks = {};
+  
+  // Error simulation flags
+  bool _simulateNetworkError = false;
+  bool _simulateInsufficientGas = false;
+  bool _simulateTransactionFailure = false;
+  int _failureRate = 0; // Percentage chance of transaction failure (0-100)
+  
   MockWalletService({this.delayInitialization = false}) {
     // Add some mock transactions
-    _transactions.add({
-      'hash': '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-      'from': '0x1234567890123456789012345678901234567890',
-      'to': '0x0987654321098765432109876543210987654321',
-      'value': 0.1,
-      'gasPrice': 20.0,
-      'status': 'confirmed',
-      'type': 'send',
-      'timestamp': DateTime.now().subtract(const Duration(days: 1)).toIso8601String(),
-      'blockNumber': 12345678,
-    });
+    _addMockTransaction(
+      hash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      from: '0x1234567890123456789012345678901234567890',
+      to: '0x0987654321098765432109876543210987654321',
+      value: 0.1,
+      status: 'confirmed',
+      type: 'send',
+      timestamp: DateTime.now().subtract(const Duration(days: 1)),
+    );
     
-    _transactions.add({
-      'hash': '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-      'from': '0x0987654321098765432109876543210987654321',
-      'to': '0x1234567890123456789012345678901234567890',
-      'value': 0.2,
-      'gasPrice': 20.0,
-      'status': 'confirmed',
-      'type': 'receive',
-      'timestamp': DateTime.now().subtract(const Duration(days: 2)).toIso8601String(),
-      'blockNumber': 12345677,
-    });
+    _addMockTransaction(
+      hash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+      from: '0x0987654321098765432109876543210987654321',
+      to: '0x1234567890123456789012345678901234567890',
+      value: 0.2,
+      status: 'confirmed',
+      type: 'receive',
+      timestamp: DateTime.now().subtract(const Duration(days: 2)),
+    );
     
     // If not delaying, complete the completer immediately
     if (!delayInitialization) {
       _delayCompleter.complete();
     }
+  }
+  
+  // Helper method to add a mock transaction with consistent format
+  void _addMockTransaction({
+    required String hash,
+    required String from,
+    required String to,
+    required double value,
+    required String status,
+    required String type,
+    required DateTime timestamp,
+    double gasPrice = 20.0,
+    int? blockNumber,
+  }) {
+    _transactions.add({
+      'hash': hash,
+      'from': from,
+      'to': to,
+      'value': value,
+      'gasPrice': gasPrice,
+      'status': status,
+      'type': type,
+      'timestamp': timestamp.toIso8601String(),
+      'blockNumber': blockNumber ?? (status == 'confirmed' ? 12345678 : null),
+    });
+    
+    // Set initial status in the status tracker
+    _transactionStatuses[hash] = status == 'confirmed' 
+        ? MockTransactionStatus.confirmed 
+        : MockTransactionStatus.pending;
   }
   
   // Helper method to complete delayed operations in tests
@@ -84,6 +130,12 @@ class MockWalletService extends WalletServiceInterface {
       await _delayCompleter.future;
     }
     return _balance;
+  }
+  
+  // Helper method to set balance for testing different scenarios
+  void setBalance(double newBalance) {
+    _balance = newBalance;
+    notifyListeners();
   }
   
   @override
@@ -234,55 +286,168 @@ class MockWalletService extends WalletServiceInterface {
     
     _balance -= amount;
     
-    // Add transaction to history
-    _transactions.add({
-      'hash': '0x${DateTime.now().millisecondsSinceEpoch}',
-      'from': _currentAddress!,
-      'to': toAddress,
-      'value': amount,
-      'gasPrice': gasPrice ?? 20.0,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-    });
+    // Generate a unique transaction hash
+    final txHash = '0x${DateTime.now().millisecondsSinceEpoch}abcdef';
+    
+    // Add transaction to history with pending status
+    _addMockTransaction(
+      hash: txHash,
+      from: _currentAddress!,
+      to: toAddress,
+      value: amount,
+      gasPrice: gasPrice ?? 20.0,
+      status: 'pending',
+      type: 'send',
+      timestamp: DateTime.now(),
+    );
+    
+    // Simulate transaction confirmation after a delay
+    _simulateTransactionConfirmation(txHash);
     
     notifyListeners();
     
-    return '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+    return txHash;
   }
   
-  @override
-  Future<String> callContract({
-    required String contractAddress,
-    required String functionName,
-    required List<dynamic> parameters,
-    double? value,
-  }) async {
-    if (delayInitialization) {
-      await _delayCompleter.future;
-    }
+  // Helper method to simulate transaction confirmation or failure
+  void _simulateTransactionConfirmation(String txHash) {
+    // Set initial status to pending
+    _transactionStatuses[txHash] = MockTransactionStatus.pending;
     
-    if (!_isUnlocked) {
-      throw Exception('Wallet is locked');
-    }
-    
-    if (value != null && value > 0) {
-      _balance -= value;
+    // Simulate a delayed confirmation or failure
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (_shouldSimulateFailure()) {
+        // Simulate transaction failure
+        MockTransactionStatus failureStatus;
+        String failureReason;
+        
+        if (_simulateNetworkError) {
+          failureStatus = MockTransactionStatus.dropped;
+          failureReason = 'Network error';
+        } else if (_simulateInsufficientGas) {
+          failureStatus = MockTransactionStatus.failed;
+          failureReason = 'Insufficient gas';
+        } else {
+          failureStatus = MockTransactionStatus.failed;
+          failureReason = 'Transaction reverted';
+        }
+        
+        _updateTransactionStatus(txHash, failureStatus);
+        
+        // Update the transaction in the history
+        for (int i = 0; i < _transactions.length; i++) {
+          if (_transactions[i]['hash'] == txHash) {
+            _transactions[i] = {
+              ..._transactions[i],
+              'status': failureStatus == MockTransactionStatus.failed ? 'failed' : 'dropped',
+              'error': failureReason,
+            };
+            break;
+          }
+        }
+      } else {
+        // Update the transaction status to confirmed
+        _updateTransactionStatus(txHash, MockTransactionStatus.confirmed);
+        
+        // Update the transaction in the history
+        for (int i = 0; i < _transactions.length; i++) {
+          if (_transactions[i]['hash'] == txHash) {
+            _transactions[i] = {
+              ..._transactions[i],
+              'status': 'confirmed',
+              'blockNumber': 12345678 + _transactions.length,
+              'gasUsed': 21000,
+            };
+            break;
+          }
+        }
+      }
+      
       notifyListeners();
+    });
+  }
+  
+  // Helper method to check if we should simulate a transaction failure
+  bool _shouldSimulateFailure() {
+    if (_simulateNetworkError || _simulateInsufficientGas) {
+      return true;
     }
     
-    // Add transaction to history
-    _transactions.add({
-      'hash': '0x${DateTime.now().millisecondsSinceEpoch}',
-      'from': _currentAddress!,
-      'to': contractAddress,
-      'value': value ?? 0,
-      'gasPrice': 20.0,
-      'status': 'pending',
-      'type': 'contract_call',
-      'timestamp': DateTime.now().toIso8601String(),
-      'blockNumber': null,
-    });
+    if (_simulateTransactionFailure) {
+      // Random chance of failure based on failure rate
+      return DateTime.now().millisecondsSinceEpoch % 100 < _failureRate;
+    }
     
-    return '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+    return false;
+  }
+  
+  // Helper method to update transaction status and notify callbacks
+  void _updateTransactionStatus(String txHash, MockTransactionStatus status) {
+    _transactionStatuses[txHash] = status;
+    
+    // Notify any registered callbacks
+    if (_statusCallbacks.containsKey(txHash)) {
+      _statusCallbacks[txHash]!(txHash, status);
+    }
+  }
+  
+  // Method for tests to register for transaction status updates
+  void registerTransactionStatusCallback(
+    String txHash, 
+    Function(String, MockTransactionStatus) callback
+  ) {
+    _statusCallbacks[txHash] = callback;
+  }
+  
+  // Method for tests to manually set transaction status
+  void setTransactionStatus(String txHash, MockTransactionStatus status) {
+    _updateTransactionStatus(txHash, status);
+    
+    // Update the transaction in the history
+    for (int i = 0; i < _transactions.length; i++) {
+      if (_transactions[i]['hash'] == txHash) {
+        String statusStr;
+        switch (status) {
+          case MockTransactionStatus.pending:
+            statusStr = 'pending';
+            break;
+          case MockTransactionStatus.confirmed:
+            statusStr = 'confirmed';
+            break;
+          case MockTransactionStatus.failed:
+            statusStr = 'failed';
+            break;
+          case MockTransactionStatus.dropped:
+            statusStr = 'dropped';
+            break;
+        }
+        
+        _transactions[i] = {
+          ..._transactions[i],
+          'status': statusStr,
+          'blockNumber': status == MockTransactionStatus.confirmed 
+              ? 12345678 + _transactions.length 
+              : null,
+        };
+        break;
+      }
+    }
+    
+    notifyListeners();
+  }
+  
+  // Helper methods for tests to configure error simulation
+  void setSimulateNetworkError(bool value) {
+    _simulateNetworkError = value;
+  }
+  
+  void setSimulateInsufficientGas(bool value) {
+    _simulateInsufficientGas = value;
+  }
+  
+  void setSimulateTransactionFailure(bool value, {int failureRate = 100}) {
+    _simulateTransactionFailure = value;
+    _failureRate = failureRate.clamp(0, 100);
   }
   
   @override
@@ -295,32 +460,7 @@ class MockWalletService extends WalletServiceInterface {
       throw Exception('Wallet is locked');
     }
     
-    return [
-      {
-        'hash': '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-        'from': '0x1234567890abcdef1234567890abcdef12345678',
-        'to': '0xabcdef1234567890abcdef1234567890abcdef12',
-        'value': 0.1,
-        'gasPrice': 20.0,
-        'gasUsed': 21000,
-        'status': 1, // TransactionStatus.confirmed
-        'type': 0, // TransactionType.send
-        'timestamp': DateTime.now().toString(),
-        'blockNumber': 12345678
-      },
-      {
-        'hash': '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-        'from': '0xabcdef1234567890abcdef1234567890abcdef12',
-        'to': '0x1234567890abcdef1234567890abcdef12345678',
-        'value': 0.5,
-        'gasPrice': 20.0,
-        'gasUsed': 21000,
-        'status': 1, // TransactionStatus.confirmed
-        'type': 1, // TransactionType.receive
-        'timestamp': DateTime.now().subtract(const Duration(days: 1)).toString(),
-        'blockNumber': 12345670
-      }
-    ];
+    return List.from(_transactions);
   }
   
   @override
@@ -334,6 +474,7 @@ class MockWalletService extends WalletServiceInterface {
     _walletExists = false;
     _balance = 1.5; // Reset to initial mock balance
     _transactions.clear();
+    _transactionStatuses.clear();
     notifyListeners();
   }
   
@@ -379,6 +520,54 @@ class MockWalletService extends WalletServiceInterface {
   Uint8List keccakAscii(String input) {
     // This is a mock implementation that returns a fixed hash for testing
     return Uint8List.fromList(List.generate(32, (index) => index));
+  }
+  
+  @override
+  Future<String> callContract({
+    required String contractAddress,
+    required String functionName,
+    required List<dynamic> parameters,
+    double? value,
+  }) async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      throw Exception('Wallet is locked');
+    }
+    
+    if (value != null && value > 0) {
+      // Check if there's enough balance
+      if (value > _balance) {
+        throw Exception('Insufficient balance');
+      }
+      _balance -= value;
+      notifyListeners();
+    }
+    
+    // Generate a unique transaction hash
+    final txHash = '0x${DateTime.now().millisecondsSinceEpoch}${functionName.hashCode}';
+    
+    // Add transaction to history with pending status
+    _addMockTransaction(
+      hash: txHash,
+      from: _currentAddress!,
+      to: contractAddress,
+      value: value ?? 0,
+      status: 'pending',
+      type: 'contract_call',
+      timestamp: DateTime.now(),
+    );
+    
+    // Store function details for testing
+    _transactions.last['functionName'] = functionName;
+    _transactions.last['parameters'] = parameters;
+    
+    // Simulate transaction confirmation after a delay
+    _simulateTransactionConfirmation(txHash);
+    
+    return txHash;
   }
   
   @override
