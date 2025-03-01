@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/web3_service.dart';
 import '../services/mock_buttplug_service.dart';
+import '../providers/meta_transaction_provider.dart';
 import 'device_control_screen.dart';
 import '../widgets/wavy_background.dart'; // Import wavy background
+import '../widgets/transaction_status_widget.dart';
 
 class AuctionScreen extends StatefulWidget {
   final int initialTab;
@@ -29,6 +31,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
   final TextEditingController _startDateController = TextEditingController();
   final TextEditingController _endDateController = TextEditingController();
   final TextEditingController _minBidController = TextEditingController();
+  List<MetaTransaction> _pendingTransactions = [];
+  final Set<String> _shownCompletionNotifications = {};
 
   @override
   void initState() {
@@ -36,6 +40,55 @@ class _AuctionScreenState extends State<AuctionScreen> {
     _startDateController.text = _formatDateTime(_startDate);
     _endDateController.text = _formatDateTime(_endDate);
     _minBidController.text = '0.01';
+    
+    // Delay to ensure provider is initialized
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _updatePendingTransactions();
+    });
+  }
+
+  void _updatePendingTransactions() {
+    final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
+    setState(() {
+      // Only track transactions that are still in progress
+      _pendingTransactions = metaTxProvider.transactions
+          .where((tx) => tx.status == MetaTransactionStatus.submitted || 
+                         tx.status == MetaTransactionStatus.processing)
+          .toList();
+    });
+    
+    // If there are any newly confirmed or failed transactions, show a brief toast
+    final recentlyCompleted = metaTxProvider.transactions
+        .where((tx) => (tx.status == MetaTransactionStatus.confirmed || 
+                       tx.status == MetaTransactionStatus.failed) &&
+                       DateTime.now().difference(tx.timestamp).inMinutes < 2)
+        .toList();
+        
+    for (final tx in recentlyCompleted) {
+      if (!_shownCompletionNotifications.contains(tx.id)) {
+        _shownCompletionNotifications.add(tx.id);
+        
+        // Show a brief toast for the completed transaction
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tx.status == MetaTransactionStatus.confirmed
+                ? 'Transaction completed: ${tx.description}'
+                : 'Transaction failed: ${tx.description}',
+            ),
+            backgroundColor: tx.status == MetaTransactionStatus.confirmed
+                ? Colors.green
+                : Colors.red,
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -50,9 +103,18 @@ class _AuctionScreenState extends State<AuctionScreen> {
   Widget build(BuildContext context) {
     final web3 = Provider.of<Web3Service>(context);
     final buttplug = Provider.of<MockButtplugService>(context);
+    final metaTxProvider = Provider.of<MetaTransactionProvider>(context);
     final theme = Theme.of(context);
     final isConnected = web3.isConnected;
     final isMockMode = web3.isMockMode;
+
+    // Update pending transactions when provider changes
+    if (_pendingTransactions.length != metaTxProvider.transactions
+        .where((tx) => tx.status == MetaTransactionStatus.submitted || 
+                       tx.status == MetaTransactionStatus.processing)
+        .length) {
+      _updatePendingTransactions();
+    }
 
     return DefaultTabController(
       length: 2,
@@ -103,7 +165,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
           child: TabBarView(
             children: [
               _buildCreateAuctionTab(web3, buttplug),
-              _buildActiveAuctionsTab(web3),
+              _buildActiveAuctionsTab(),
             ],
           ),
         ),
@@ -281,8 +343,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                 );
                               } else {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Auction created successfully!'),
+                                  SnackBar(
+                                    content: const Text('Auction created successfully!'),
                                     backgroundColor: Colors.green,
                                   ),
                                 );
@@ -362,7 +424,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
     );
   }
 
-  Widget _buildActiveAuctionsTab(Web3Service web3) {
+  Widget _buildActiveAuctionsTab() {
+    final web3 = Provider.of<Web3Service>(context);
     if (!web3.isConnected) {
       return Center(
         child: Column(
@@ -389,113 +452,187 @@ class _AuctionScreenState extends State<AuctionScreen> {
       );
     }
     
-    return FutureBuilder(
-      future: web3.loadActiveAuctions(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.done) {
-          return ListView.builder(
-            itemCount: web3.activeAuctions.length,
-            itemBuilder: (context, index) {
-              final deviceId = web3.activeAuctions.keys.elementAt(index);
-              final auction = web3.activeAuctions[deviceId]!;
-              
-              // Skip if auction data is invalid
-              if (auction['endTime'] == null) {
-                return const SizedBox.shrink();
-              }
-              
-              final now = DateTime.now();
-              final endTimeBigInt = auction['endTime'] as BigInt;
-              final endTime = DateTime.fromMillisecondsSinceEpoch(
-                (endTimeBigInt.toInt() * 1000)
-              );
-              final hasEnded = now.isAfter(endTime);
-              final isActive = auction['active'] as bool? ?? false;
-              final isFinalized = auction['finalized'] as bool? ?? false;
-              final hasControl = auction['highestBidder'] == web3.currentAddress;
-              final owner = auction['owner'];  
-              final highestBid = auction['highestBid'] as BigInt;
-              final highestBidder = auction['highestBidder'];
-              final minBid = auction['minBid'] as BigInt? ?? BigInt.zero;
-
-              return Card(
-                margin: const EdgeInsets.all(8.0),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Device ID: ${deviceId.substring(0, 10)}...'),
-                      Text('Owner: ${_formatAddress(owner)}'),
-                      Text('End Time: ${_formatDateTime(endTime)}'),
-                      Text('Minimum Bid: ${_formatEther(minBid)} ETH'),
-                      if (highestBid > BigInt.zero && highestBidder != null)
-                        Text(
-                          'Current Bid: ${_formatEther(highestBid)} ETH by ${_formatAddress(highestBidder)}',
-                        ),
-                      const SizedBox(height: 8),
-                      // Status indicator
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: isActive 
-                              ? Colors.green.shade100 
-                              : (isFinalized ? Colors.blue.shade100 : Colors.orange.shade100),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          isActive 
-                              ? 'Active' 
-                              : (isFinalized ? 'Finalized' : 'Ended'),
-                          style: TextStyle(
-                            color: isActive 
-                                ? Colors.green.shade800 
-                                : (isFinalized ? Colors.blue.shade800 : Colors.orange.shade800),
-                            fontWeight: FontWeight.bold,
+    return RefreshIndicator(
+      onRefresh: _refreshAuctions,
+      child: Column(
+        children: [
+          // Compact transaction status indicator for pending transactions only
+          if (_pendingTransactions.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              margin: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.sync, color: Colors.blue, size: 16),
+                  const SizedBox(width: 8),
+                  Text(
+                    _pendingTransactions.length == 1
+                        ? '1 transaction in progress'
+                        : '${_pendingTransactions.length} transactions in progress',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      showModalBottomSheet(
+                        context: context,
+                        builder: (context) => Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Pending Transactions',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 18,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              ..._pendingTransactions.map((tx) => 
+                                TransactionStatusWidget(
+                                  transaction: tx,
+                                  compact: false,
+                                )
+                              ).toList(),
+                            ],
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          if (isActive && !hasEnded)
-                            ElevatedButton(
-                              onPressed: () => _showBidDialog(context, web3, deviceId, auction),
-                              child: const Text('Place Bid'),
-                            ),
-                          if (hasEnded && !isFinalized)
-                            ElevatedButton(
-                              onPressed: () => _finalizeAuction(web3, deviceId),
-                              child: const Text('Finalize Auction'),
-                            ),
-                          if (hasControl)
-                            ElevatedButton(
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => DeviceControlScreen(
-                                      deviceId: deviceId,
-                                      endTime: endTime,
+                      );
+                    },
+                    style: TextButton.styleFrom(
+                      minimumSize: Size.zero,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Details', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _errorMessage != null
+                    ? Center(child: Text('Error: $_errorMessage'))
+                    : FutureBuilder(
+                        future: web3.loadActiveAuctions(),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.done) {
+                            return ListView.builder(
+                              itemCount: web3.activeAuctions.length,
+                              itemBuilder: (context, index) {
+                                final deviceId = web3.activeAuctions.keys.elementAt(index);
+                                final auction = web3.activeAuctions[deviceId]!;
+                                
+                                // Skip if auction data is invalid
+                                if (auction['endTime'] == null) {
+                                  return const SizedBox.shrink();
+                                }
+                                
+                                final now = DateTime.now();
+                                final endTimeBigInt = auction['endTime'] as BigInt;
+                                final endTime = DateTime.fromMillisecondsSinceEpoch(
+                                  (endTimeBigInt.toInt() * 1000)
+                                );
+                                final hasEnded = now.isAfter(endTime);
+                                final isActive = auction['active'] as bool? ?? false;
+                                final isFinalized = auction['finalized'] as bool? ?? false;
+                                final hasControl = auction['highestBidder'] == web3.currentAddress;
+                                final owner = auction['owner'];  
+                                final highestBid = auction['highestBid'] as BigInt;
+                                final highestBidder = auction['highestBidder'];
+                                final minBid = auction['minBid'] as BigInt? ?? BigInt.zero;
+
+                                return Card(
+                                  margin: const EdgeInsets.all(8.0),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(16.0),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('Device ID: ${deviceId.substring(0, 10)}...'),
+                                        Text('Owner: ${_formatAddress(owner)}'),
+                                        Text('End Time: ${_formatDateTime(endTime)}'),
+                                        Text('Minimum Bid: ${_formatEther(minBid)} ETH'),
+                                        if (highestBid > BigInt.zero && highestBidder != null)
+                                          Text(
+                                            'Current Bid: ${_formatEther(highestBid)} ETH by ${_formatAddress(highestBidder)}',
+                                          ),
+                                        const SizedBox(height: 8),
+                                        // Status indicator
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: isActive 
+                                                ? Colors.green.shade100 
+                                                : (isFinalized ? Colors.blue.shade100 : Colors.orange.shade100),
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            isActive 
+                                                ? 'Active' 
+                                                : (isFinalized ? 'Finalized' : 'Ended'),
+                                            style: TextStyle(
+                                              color: isActive 
+                                                  ? Colors.green.shade800 
+                                                  : (isFinalized ? Colors.blue.shade800 : Colors.orange.shade800),
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 16),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                          children: [
+                                            if (isActive && !hasEnded)
+                                              ElevatedButton(
+                                                onPressed: () => _showBidDialog(context, web3, deviceId, auction),
+                                                child: const Text('Place Bid'),
+                                              ),
+                                            if (hasEnded && !isFinalized)
+                                              ElevatedButton(
+                                                onPressed: () => _finalizeAuction(web3, deviceId),
+                                                child: const Text('Finalize Auction'),
+                                              ),
+                                            if (hasControl)
+                                              ElevatedButton(
+                                                onPressed: () {
+                                                  Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (context) => DeviceControlScreen(
+                                                        deviceId: deviceId,
+                                                        endTime: endTime,
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                                child: const Text('Control Device'),
+                                              ),
+                                          ],
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 );
                               },
-                              child: const Text('Control Device'),
-                            ),
-                        ],
+                            );
+                          } else {
+                            return const Center(child: CircularProgressIndicator());
+                          }
+                        },
                       ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          );
-        } else {
-          return const Center(child: CircularProgressIndicator());
-        }
-      },
+          ),
+        ],
+      ),
     );
   }
 
@@ -546,7 +683,10 @@ class _AuctionScreenState extends State<AuctionScreen> {
     // Convert wei to ETH for display
     final minRequiredEth = minRequired.toDouble() / 1e18;
     
-    final amount = await _showBidDialogNew(context, minRequiredEth);
+    // Store context in a local variable to avoid using it across async gaps
+    final currentContext = context;
+    
+    final amount = await _showBidDialogNew(currentContext, minRequiredEth);
     
     if (amount == null) return;
     
@@ -555,111 +695,108 @@ class _AuctionScreenState extends State<AuctionScreen> {
     });
     
     try {
-      final result = await web3.placeBidNew(
-        deviceId: deviceId,
-        amount: amount,
+      // Store context in a local variable to avoid using it across async gaps
+      final scaffoldMessenger = ScaffoldMessenger.of(currentContext);
+      final metaTxProvider = Provider.of<MetaTransactionProvider>(currentContext, listen: false);
+      
+      // Place bid using meta-transaction
+      // ignore: unused_local_variable
+      final txId = await metaTxProvider.executeFunction(
+        targetContract: web3.getContractAddress(),
+        functionSignature: 'placeBid(string,uint256)',
+        functionParams: [deviceId, (amount * 1e18).toInt()],
+        description: 'Bid $amount ETH on auction $deviceId',
       );
       
-      if (result.success) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Bid placed successfully!'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          // Refresh the auction data
-          web3.loadActiveAuctions();
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error: ${result.message}'),
-              backgroundColor: Colors.red,
-            ),
-          );
-          setState(() => _isLoading = false);
-        }
-      }
-    } catch (e) {
-      String errorMsg = e.toString();
-      if (errorMsg.startsWith('Exception: ')) {
-        errorMsg = errorMsg.substring('Exception: '.length);
-      }
-      
+      // Show a subtle confirmation that the bid was submitted
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        scaffoldMessenger.showSnackBar(
           SnackBar(
-            content: Text('Error: $errorMsg'),
-            backgroundColor: Colors.red,
+            content: const Text('Bid submitted'),
+            backgroundColor: Colors.blue,
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
           ),
         );
-        setState(() => _isLoading = false);
       }
+      
+      // Update pending transactions
+      _updatePendingTransactions();
+      
+      // Refresh auctions after a short delay to allow transaction to process
+      Future.delayed(const Duration(seconds: 2), _refreshAuctions);
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to place bid: ${e.toString()}';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorMessage!)),
+      );
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
   Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
+    // Store context in a local variable to avoid using it across async gaps
+    final currentContext = context;
+    
     setState(() {
       _isLoading = true;
     });
     
     try {
-      final result = await web3.finalizeAuctionNew(
-        deviceId: deviceId,
+      // Store context in a local variable to avoid using it across async gaps
+      final scaffoldMessenger = ScaffoldMessenger.of(currentContext);
+      final metaTxProvider = Provider.of<MetaTransactionProvider>(currentContext, listen: false);
+      
+      // Finalize auction using meta-transaction
+      // ignore: unused_local_variable
+      final txId = await metaTxProvider.executeFunction(
+        targetContract: web3.getContractAddress(),
+        functionSignature: 'finalizeAuction(string)',
+        functionParams: [deviceId],
+        description: 'Finalize auction $deviceId',
       );
       
-      if (result.success) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Auction finalized successfully!'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          
-          // Navigate to device control screen if auction was finalized
-          final auction = web3.activeAuctions[deviceId];
-          if (auction != null) {
-            final endTimeBigInt = auction['endTime'] as BigInt;
-            final endTime = DateTime.fromMillisecondsSinceEpoch(
-              (endTimeBigInt.toInt() * 1000)
-            );
-            
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => DeviceControlScreen(
-                  deviceId: deviceId,
-                  endTime: endTime,
-                ),
-              ),
-            );
-          } else {
-            web3.loadActiveAuctions();
-          }
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error: ${result.message}'),
-              backgroundColor: Colors.red,
-            ),
-          );
-          setState(() => _isLoading = false);
-        }
-      }
-    } catch (e) {
+      // Show a subtle confirmation
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        scaffoldMessenger.showSnackBar(
           SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: Colors.red,
+            content: const Text('Finalization request submitted'),
+            backgroundColor: Colors.blue,
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
           ),
         );
-        setState(() => _isLoading = false);
       }
+      
+      // Update pending transactions
+      _updatePendingTransactions();
+      
+      // Refresh auctions after a short delay to allow transaction to process
+      Future.delayed(const Duration(seconds: 2), _refreshAuctions);
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to finalize auction: ${e.toString()}';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorMessage!)),
+      );
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
@@ -682,13 +819,14 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
   void _showNetworkStatus() async {
     final web3Service = context.read<Web3Service>();
+    final currentContext = context;
     
     // Show loading dialog
     showDialog(
-      context: context,
+      context: currentContext,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Checking Network Status'),
+      builder: (context) => const AlertDialog(
+        title: Text('Checking Network Status'),
         content: SizedBox(
           height: 100,
           child: Center(
@@ -703,7 +841,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
       final status = await web3Service.checkNetworkStatus();
       
       // Close loading dialog
-      if (mounted) Navigator.pop(context);
+      if (mounted) Navigator.pop(currentContext);
       
       // Format the status information for display
       final formattedStatus = StringBuffer();
@@ -769,7 +907,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
       // Show the status dialog
       if (mounted) {
         showDialog(
-          context: context,
+          context: currentContext,
           builder: (context) => AlertDialog(
             title: const Text('Network Status'),
             content: SingleChildScrollView(
@@ -784,16 +922,18 @@ class _AuctionScreenState extends State<AuctionScreen> {
                 onPressed: () {
                   Navigator.pop(context);
                   web3Service.toggleMockMode();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        web3Service.isMockMode
-                            ? 'Switched to mock mode'
-                            : 'Switched to blockchain mode',
+                  if (mounted) {
+                    ScaffoldMessenger.of(currentContext).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          web3Service.isMockMode
+                              ? 'Switched to mock mode'
+                              : 'Switched to blockchain mode',
+                        ),
+                        backgroundColor: web3Service.isMockMode ? Colors.orange : Colors.blue,
                       ),
-                      backgroundColor: web3Service.isMockMode ? Colors.orange : Colors.blue,
-                    ),
-                  );
+                    );
+                  }
                   _refreshAuctions();
                 },
                 child: Text(
@@ -808,12 +948,12 @@ class _AuctionScreenState extends State<AuctionScreen> {
       }
     } catch (e) {
       // Close loading dialog
-      if (mounted) Navigator.pop(context);
+      if (mounted) Navigator.pop(currentContext);
       
       // Show error dialog
       if (mounted) {
         showDialog(
-          context: context,
+          context: currentContext,
           builder: (context) => AlertDialog(
             title: const Text('Error'),
             content: Text('Failed to check network status: $e'),
@@ -829,9 +969,9 @@ class _AuctionScreenState extends State<AuctionScreen> {
     }
   }
 
-  void _refreshAuctions() {
+  Future<void> _refreshAuctions() async {
     final web3Service = context.read<Web3Service>();
-    web3Service.loadActiveAuctions();
+    await web3Service.loadActiveAuctions();
   }
 
   Future<double?> _showBidDialogNew(BuildContext context, [double minBid = 0.1]) async {
@@ -871,7 +1011,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
                 if (bidAmount != null && bidAmount! > minBid) {
                   Navigator.pop(context, bidAmount);
                 } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  final messenger = ScaffoldMessenger.of(context);
+                  messenger.showSnackBar(
                     SnackBar(
                       content: Text('Please enter a valid amount greater than $minBid ETH'),
                       backgroundColor: Colors.red,

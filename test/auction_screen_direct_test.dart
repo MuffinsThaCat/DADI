@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:dadi/models/auction.dart';
 import 'package:dadi/models/operation_result.dart';
 import 'dart:developer' as developer;
+import 'package:dadi/providers/meta_transaction_provider.dart';
 
 // Mock implementation for Web3Service
 class MockWeb3Service extends ChangeNotifier {
@@ -137,6 +138,91 @@ class MockWeb3Service extends ChangeNotifier {
   }
 }
 
+// Mock WebSocket service for transaction status updates
+class MockMetaTransactionProvider extends ChangeNotifier implements MetaTransactionProvider {
+  final List<MetaTransaction> _transactions = [];
+  
+  @override
+  List<MetaTransaction> get transactions => _transactions;
+  
+  // Quota-related getters
+  @override
+  int get remainingQuota => 5;
+  
+  @override
+  int get totalQuota => 10;
+  
+  @override
+  DateTime get quotaResetTime => DateTime.now().add(const Duration(days: 1));
+  
+  @override
+  bool get hasQuotaAvailable => true;
+  
+  @override
+  Future<String> executeFunction({
+    required String targetContract,
+    required String functionSignature,
+    required List<dynamic> functionParams,
+    required String description,
+    int? gasLimit,
+    int? validUntilTime,
+  }) async {
+    final txHash = 'tx_${DateTime.now().millisecondsSinceEpoch}';
+    _transactions.add(MetaTransaction(
+      id: 'tx_${DateTime.now().millisecondsSinceEpoch}_id',
+      txHash: txHash,
+      description: description,
+      timestamp: DateTime.now(),
+      status: MetaTransactionStatus.processing,
+      targetContract: targetContract,
+      functionSignature: functionSignature,
+    ));
+    notifyListeners();
+    return txHash;
+  }
+  
+  @override
+  void clearHistory() {
+    _transactions.clear();
+    notifyListeners();
+  }
+  
+  // Helper method to simulate transaction updates
+  void updateTransactionStatus(String txHash, MetaTransactionStatus status, {String? error}) {
+    final index = _transactions.indexWhere((tx) => tx.txHash == txHash);
+    if (index != -1) {
+      _transactions[index] = MetaTransaction(
+        id: _transactions[index].id,
+        txHash: _transactions[index].txHash,
+        description: _transactions[index].description,
+        timestamp: _transactions[index].timestamp,
+        status: status,
+        error: error,
+        targetContract: _transactions[index].targetContract,
+        functionSignature: _transactions[index].functionSignature,
+      );
+      notifyListeners();
+    }
+  }
+  
+  // Add a test transaction
+  String addTestTransaction(String description, MetaTransactionStatus status) {
+    final txHash = 'tx_${DateTime.now().millisecondsSinceEpoch}';
+    final id = 'tx_${DateTime.now().millisecondsSinceEpoch}_id';
+    _transactions.add(MetaTransaction(
+      id: id,
+      txHash: txHash,
+      description: description,
+      timestamp: DateTime.now(),
+      status: status,
+      targetContract: '0xTestContract',
+      functionSignature: 'test()',
+    ));
+    notifyListeners();
+    return txHash;
+  }
+}
+
 // Mock AuctionScreen implementation that doesn't depend on the real implementation
 class MockAuctionScreen extends StatefulWidget {
   final String deviceId;
@@ -246,7 +332,67 @@ class _MockAuctionScreenState extends State<MockAuctionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Auction Details'),
+        title: Text(widget.deviceId),
+        actions: [
+          // Add transaction status indicator
+          Consumer<MockMetaTransactionProvider>(
+            builder: (context, provider, child) {
+              final pendingTransactions = provider.transactions
+                  .where((tx) => tx.status == MetaTransactionStatus.processing || 
+                                tx.status == MetaTransactionStatus.submitted)
+                  .toList();
+              
+              if (pendingTransactions.isEmpty) {
+                return const SizedBox.shrink();
+              }
+              
+              return Padding(
+                padding: const EdgeInsets.only(right: 16.0),
+                child: IconButton(
+                  icon: Badge(
+                    label: Text(pendingTransactions.length.toString()),
+                    child: const Icon(Icons.sync),
+                  ),
+                  onPressed: () {
+                    // Show transaction details
+                    showModalBottomSheet(
+                      context: context,
+                      builder: (context) => Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Pending Transactions',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            ...pendingTransactions.map((tx) => 
+                              ListTile(
+                                title: Text(tx.description),
+                                subtitle: Text(tx.status.toString().split('.').last),
+                                leading: Icon(
+                                  tx.status == MetaTransactionStatus.processing ? 
+                                    Icons.sync : Icons.check_circle,
+                                  color: tx.status == MetaTransactionStatus.processing ? 
+                                    Colors.orange : Colors.green,
+                                ),
+                              )
+                            ).toList(),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -323,9 +469,11 @@ class _MockAuctionScreenState extends State<MockAuctionScreen> {
 
 void main() {
   late MockWeb3Service mockWeb3Service;
+  late MockMetaTransactionProvider mockTransactionProvider;
 
   setUp(() {
     mockWeb3Service = MockWeb3Service();
+    mockTransactionProvider = MockMetaTransactionProvider();
     
     // Add a test auction
     final now = DateTime.now();
@@ -347,8 +495,15 @@ void main() {
   });
 
   Widget createTestApp() {
-    return ChangeNotifierProvider<MockWeb3Service>.value(
-      value: mockWeb3Service,
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<MockWeb3Service>.value(
+          value: mockWeb3Service,
+        ),
+        ChangeNotifierProvider<MockMetaTransactionProvider>.value(
+          value: mockTransactionProvider,
+        ),
+      ],
       child: const MaterialApp(
         home: MockAuctionScreen(deviceId: 'test-device-1'),
       ),
@@ -361,7 +516,8 @@ void main() {
       await tester.pumpWidget(createTestApp());
       await tester.pumpAndSettle();
 
-      expect(find.text('test-device-1'), findsOneWidget);
+      // Find the device ID in the app bar title
+      expect(find.widgetWithText(AppBar, 'test-device-1'), findsOneWidget);
       expect(find.text('Place Bid'), findsOneWidget);
     });
 
@@ -448,6 +604,74 @@ void main() {
 
       // Verify auction has been finalized
       expect(find.text('Auction has been finalized'), findsOneWidget);
+    });
+  });
+
+  group('Transaction Status Display Tests', () {
+    testWidgets('Shows transaction status indicator when transactions are in progress',
+        (WidgetTester tester) async {
+      // Add a processing transaction
+      mockTransactionProvider.addTestTransaction(
+        'Test Transaction',
+        MetaTransactionStatus.processing
+      );
+      
+      await tester.pumpWidget(createTestApp());
+      await tester.pumpAndSettle();
+      
+      // Verify transaction indicator is shown
+      expect(find.byIcon(Icons.sync), findsOneWidget);
+      
+      // Verify the indicator shows "1" for one pending transaction
+      expect(find.text('1'), findsOneWidget);
+    });
+    
+    testWidgets('Updates transaction status indicator when transaction completes',
+        (WidgetTester tester) async {
+      // Add a processing transaction
+      final txHash = mockTransactionProvider.addTestTransaction(
+        'Test Transaction',
+        MetaTransactionStatus.processing
+      );
+      
+      await tester.pumpWidget(createTestApp());
+      await tester.pumpAndSettle();
+      
+      // Verify transaction indicator shows "1"
+      expect(find.text('1'), findsOneWidget);
+      
+      // Update transaction to confirmed
+      mockTransactionProvider.updateTransactionStatus(
+        txHash,
+        MetaTransactionStatus.confirmed
+      );
+      
+      await tester.pump();
+      await tester.pumpAndSettle();
+      
+      // Verify transaction indicator is no longer showing "1"
+      // (It might not be visible at all if there are no pending transactions)
+      expect(find.text('1'), findsNothing);
+    });
+    
+    testWidgets('Shows transaction details when indicator is tapped',
+        (WidgetTester tester) async {
+      // Add a processing transaction
+      mockTransactionProvider.addTestTransaction(
+        'Test Transaction',
+        MetaTransactionStatus.processing
+      );
+      
+      await tester.pumpWidget(createTestApp());
+      await tester.pumpAndSettle();
+      
+      // Tap on the transaction indicator
+      await tester.tap(find.byIcon(Icons.sync));
+      await tester.pumpAndSettle();
+      
+      // Verify transaction details are shown
+      expect(find.text('Test Transaction'), findsOneWidget);
+      expect(find.text('processing'), findsOneWidget);
     });
   });
 }
