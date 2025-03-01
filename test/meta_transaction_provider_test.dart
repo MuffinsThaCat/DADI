@@ -132,6 +132,7 @@ void main() {
     
     test('should track transaction status via WebSocket', () async {
       // Setup wallet
+      await mockWalletService.createWallet(password: 'password123');
       mockWalletService.unlock();
       mockWalletService.setAddress('0xuser1234567890');
       
@@ -170,6 +171,7 @@ void main() {
     
     test('should handle transaction failure', () async {
       // Setup wallet
+      await mockWalletService.createWallet(password: 'password123');
       mockWalletService.unlock();
       mockWalletService.setAddress('0xuser1234567890');
       
@@ -197,6 +199,9 @@ void main() {
     test('should track user transactions', () async {
       // Setup wallet
       const userAddress = '0xuser1234567890';
+      
+      // Create wallet first
+      await mockWalletService.createWallet(password: 'password123');
       mockWalletService.unlock();
       mockWalletService.setAddress(userAddress);
       
@@ -224,12 +229,18 @@ void main() {
       // Simulate updates for both transactions
       mockWebSocketService.simulateTransactionUpdate(txHash1, TransactionStatus.confirmed);
       
+      // Add a small delay to allow the status update to propagate
+      await Future.delayed(const Duration(milliseconds: 50));
+      
       // Verify the first transaction is confirmed
       final tx1 = provider.transactions.firstWhere((tx) => tx.txHash == txHash1);
       expect(tx1.status, MetaTransactionStatus.confirmed);
       
       // Simulate update for the second transaction
       mockWebSocketService.simulateTransactionUpdate(txHash2, TransactionStatus.failed);
+      
+      // Add a small delay to allow the status update to propagate
+      await Future.delayed(const Duration(milliseconds: 50));
       
       // Verify the second transaction is failed
       final tx2 = provider.transactions.firstWhere((tx) => tx.txHash == txHash2);
@@ -238,6 +249,8 @@ void main() {
     
     test('should clear transaction history', () async {
       // Setup wallet
+      // Create wallet first
+      await mockWalletService.createWallet(password: 'password123');
       mockWalletService.unlock();
       mockWalletService.setAddress('0xuser1234567890');
       
@@ -267,6 +280,8 @@ void main() {
     
     test('should handle WebSocket reconnection', () async {
       // Setup wallet
+      // Create wallet first
+      await mockWalletService.createWallet(password: 'password123');
       mockWalletService.unlock();
       mockWalletService.setAddress('0xuser1234567890');
       

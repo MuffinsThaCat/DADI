@@ -10,6 +10,7 @@ class MockWalletService extends WalletServiceInterface {
   double _balance = 1.5; // Mock balance
   final bool delayInitialization;
   final List<Map<String, dynamic>> _transactions = [];
+  bool _isLoading = false;
   
   // Completer to control when delayed operations complete
   final Completer<void> _delayCompleter = Completer<void>();
@@ -59,8 +60,23 @@ class MockWalletService extends WalletServiceInterface {
   @override
   bool get isUnlocked => _isUnlocked;
   
+  // Helper method for tests to directly set unlocked state
+  void unlock() {
+    _isUnlocked = true;
+    notifyListeners();
+  }
+  
   @override
   String? get currentAddress => _currentAddress;
+  
+  @override
+  bool get isLoading => _isLoading;
+  
+  // Helper method for tests to control loading state
+  void setLoading(bool loading) {
+    _isLoading = loading;
+    notifyListeners();
+  }
   
   @override
   Future<double> get balance async {
@@ -115,15 +131,6 @@ class MockWalletService extends WalletServiceInterface {
       await _delayCompleter.future;
     }
     return _walletExists;
-  }
-  
-  // Helper methods for testing
-  void unlock() {
-    if (!_walletExists) {
-      throw Exception('Wallet does not exist');
-    }
-    _isUnlocked = true;
-    notifyListeners();
   }
   
   void setAddress(String address) {

@@ -26,6 +26,7 @@ class WalletServiceMobile extends WalletServiceInterface {
   bool _isUnlocked = false;
   String? _currentAddress;
   EthPrivateKey? _credentials;
+  bool _isLoading = false;
   
   // Constructor
   WalletServiceMobile({required String rpcUrl})
@@ -45,6 +46,9 @@ class WalletServiceMobile extends WalletServiceInterface {
   
   @override
   String? get currentAddress => _currentAddress;
+  
+  @override
+  bool get isLoading => _isLoading;
   
   @override
   Future<double> get balance async {

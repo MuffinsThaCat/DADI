@@ -11,6 +11,9 @@ abstract class WalletServiceInterface extends ChangeNotifier {
   /// Current wallet address
   String? get currentAddress;
   
+  /// Whether the wallet is currently loading data
+  bool get isLoading;
+  
   /// Current wallet balance in ETH
   Future<double> get balance;
   

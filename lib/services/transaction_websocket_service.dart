@@ -76,6 +76,9 @@ class TransactionWebSocketService {
   /// Maximum number of reconnection attempts
   final int _maxReconnectAttempts;
   
+  /// Factory function for creating WebSocket channels
+  final WebSocketChannel Function(Uri) _webSocketChannelFactory;
+  
   /// WebSocket channel
   WebSocketChannel? _channel;
   
@@ -99,10 +102,12 @@ class TransactionWebSocketService {
     required String webSocketUrl,
     int reconnectIntervalMs = 5000,
     int maxReconnectAttempts = 10,
+    WebSocketChannel Function(Uri)? webSocketChannelFactory,
   }) : _webSocketUrl = webSocketUrl,
        _reconnectIntervalMs = reconnectIntervalMs,
-       _maxReconnectAttempts = maxReconnectAttempts;
-  
+       _maxReconnectAttempts = maxReconnectAttempts,
+       _webSocketChannelFactory = webSocketChannelFactory ?? WebSocketChannel.connect;
+
   /// Initialize the service
   Future<void> initialize() async {
     if (_isInitialized) {
@@ -187,7 +192,7 @@ class TransactionWebSocketService {
   /// Connect to the WebSocket server
   Future<void> _connectWebSocket() async {
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(_webSocketUrl));
+      _channel = _webSocketChannelFactory(Uri.parse(_webSocketUrl));
       
       // Listen for incoming messages
       _channel!.stream.listen(

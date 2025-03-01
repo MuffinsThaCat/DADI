@@ -141,7 +141,17 @@ void main() {
       final delayedWalletService = MockWalletService(delayInitialization: true);
       
       // Create wallet with delay
-      final address = await delayedWalletService.createWallet(password: 'password123');
+      final createFuture = delayedWalletService.createWallet(password: 'password123');
+      
+      // At this point, the wallet should not be created yet
+      expect(delayedWalletService.isCreated, false);
+      expect(delayedWalletService.isUnlocked, false);
+      
+      // Complete the delay
+      delayedWalletService.completeDelay();
+      
+      // Now the createWallet should complete
+      final address = await createFuture;
       
       expect(address, '0x1234567890abcdef1234567890abcdef12345678');
       expect(delayedWalletService.isCreated, true);
