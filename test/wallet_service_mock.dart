@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:dadi/services/wallet_service_interface.dart';
 
@@ -9,6 +10,9 @@ class MockWalletService extends WalletServiceInterface {
   double _balance = 1.5; // Mock balance
   final bool delayInitialization;
   final List<Map<String, dynamic>> _transactions = [];
+  
+  // Completer to control when delayed operations complete
+  final Completer<void> _delayCompleter = Completer<void>();
   
   MockWalletService({this.delayInitialization = false}) {
     // Add some mock transactions
@@ -35,6 +39,18 @@ class MockWalletService extends WalletServiceInterface {
       'timestamp': DateTime.now().subtract(const Duration(days: 2)).toIso8601String(),
       'blockNumber': 12345677,
     });
+    
+    // If not delaying, complete the completer immediately
+    if (!delayInitialization) {
+      _delayCompleter.complete();
+    }
+  }
+  
+  // Helper method to complete delayed operations in tests
+  void completeDelay() {
+    if (!_delayCompleter.isCompleted) {
+      _delayCompleter.complete();
+    }
   }
   
   @override
@@ -47,12 +63,17 @@ class MockWalletService extends WalletServiceInterface {
   String? get currentAddress => _currentAddress;
   
   @override
-  Future<double> get balance async => _balance;
+  Future<double> get balance async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    return _balance;
+  }
   
   @override
   Future<String> createWallet({required String password}) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     _currentAddress = '0x1234567890abcdef1234567890abcdef12345678';
@@ -65,7 +86,7 @@ class MockWalletService extends WalletServiceInterface {
   @override
   Future<bool> unlockWallet({required String password}) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     if (!_walletExists) {
@@ -90,7 +111,25 @@ class MockWalletService extends WalletServiceInterface {
   
   @override
   Future<bool> walletExists() async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
     return _walletExists;
+  }
+  
+  // Helper methods for testing
+  void unlock() {
+    if (!_walletExists) {
+      throw Exception('Wallet does not exist');
+    }
+    _isUnlocked = true;
+    notifyListeners();
+  }
+  
+  void setAddress(String address) {
+    _currentAddress = address;
+    _walletExists = true;
+    notifyListeners();
   }
   
   @override
@@ -99,7 +138,7 @@ class MockWalletService extends WalletServiceInterface {
     required String password,
   }) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     _currentAddress = '0x1234567890abcdef1234567890abcdef12345678';
@@ -115,7 +154,7 @@ class MockWalletService extends WalletServiceInterface {
     required String password,
   }) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     _currentAddress = '0x1234567890abcdef1234567890abcdef12345678';
@@ -174,7 +213,7 @@ class MockWalletService extends WalletServiceInterface {
     double? gasPrice,
   }) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     if (!_isUnlocked) {
@@ -211,7 +250,7 @@ class MockWalletService extends WalletServiceInterface {
     double? value,
   }) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     if (!_isUnlocked) {
@@ -242,18 +281,47 @@ class MockWalletService extends WalletServiceInterface {
   @override
   Future<List<Map<String, dynamic>>> getTransactionHistory() async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
-    if (!_isUnlocked) {
+    if (!isUnlocked) {
       throw Exception('Wallet is locked');
     }
     
-    return _transactions;
+    return [
+      {
+        'hash': '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        'from': '0x1234567890abcdef1234567890abcdef12345678',
+        'to': '0xabcdef1234567890abcdef1234567890abcdef12',
+        'value': 0.1,
+        'gasPrice': 20.0,
+        'gasUsed': 21000,
+        'status': 1, // TransactionStatus.confirmed
+        'type': 0, // TransactionType.send
+        'timestamp': DateTime.now().toString(),
+        'blockNumber': 12345678
+      },
+      {
+        'hash': '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+        'from': '0xabcdef1234567890abcdef1234567890abcdef12',
+        'to': '0x1234567890abcdef1234567890abcdef12345678',
+        'value': 0.5,
+        'gasPrice': 20.0,
+        'gasUsed': 21000,
+        'status': 1, // TransactionStatus.confirmed
+        'type': 1, // TransactionType.receive
+        'timestamp': DateTime.now().subtract(const Duration(days: 1)).toString(),
+        'blockNumber': 12345670
+      }
+    ];
   }
   
   @override
   Future<void> resetWallet() async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
     _currentAddress = null;
     _isUnlocked = false;
     _walletExists = false;
@@ -265,7 +333,7 @@ class MockWalletService extends WalletServiceInterface {
   @override
   Future<String> signMessage({required String message}) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     if (!_isUnlocked) {
@@ -279,7 +347,7 @@ class MockWalletService extends WalletServiceInterface {
   @override
   Future<String> signTypedData({required Map<String, dynamic> typedData}) async {
     if (delayInitialization) {
-      await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
+      await _delayCompleter.future;
     }
     
     if (!_isUnlocked) {
