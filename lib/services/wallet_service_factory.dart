@@ -3,6 +3,12 @@ import 'package:flutter/foundation.dart';
 import 'wallet_service_interface.dart';
 import 'wallet_service_mobile.dart';
 import 'wallet_service_web.dart';
+import 'transaction_websocket_service.dart';
+import 'transaction_websocket_service_platform.dart' as platform;
+import 'package:web_socket_channel/web_socket_channel.dart';
+
+/// Factory function type for creating WebSocket channels
+typedef WebSocketChannelFactory = WebSocketChannel Function(Uri);
 
 /// Factory for creating the appropriate wallet service implementation
 class WalletServiceFactory {
@@ -22,5 +28,31 @@ class WalletServiceFactory {
       // Desktop implementation (fallback to mobile for now)
       return WalletServiceMobile(rpcUrl: effectiveRpcUrl);
     }
+  }
+  
+  /// Create a transaction websocket service
+  static TransactionWebSocketService createTransactionWebSocketService({
+    String webSocketUrl = 'wss://relayer.dadi.network/ws',
+    int reconnectIntervalMs = 5000,
+    int maxReconnectAttempts = 10,
+    WebSocketChannelFactory? webSocketChannelFactory,
+  }) {
+    return platform.createTransactionWebSocketService(
+      webSocketUrl: webSocketUrl,
+      reconnectIntervalMs: reconnectIntervalMs,
+      maxReconnectAttempts: maxReconnectAttempts,
+      webSocketChannelFactory: webSocketChannelFactory,
+    );
+  }
+  
+  /// Create all services needed for the app
+  static Map<String, dynamic> createAllServices({String? rpcUrl}) {
+    final walletService = createWalletService(rpcUrl: rpcUrl);
+    final webSocketService = createTransactionWebSocketService();
+    
+    return {
+      'walletService': walletService,
+      'webSocketService': webSocketService,
+    };
   }
 }

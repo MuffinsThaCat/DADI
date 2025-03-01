@@ -3,13 +3,28 @@ import '../providers/meta_transaction_provider.dart';
 
 /// Widget to display the status of a meta-transaction with real-time updates
 class TransactionStatusWidget extends StatelessWidget {
+  /// The transaction to display
   final MetaTransaction transaction;
+  
+  /// Whether to use compact mode (card with minimal info) or detailed mode
   final bool compact;
+  
+  /// Whether to use web-specific styling (more subtle for web platforms)
+  final bool useWebStyling;
+  
+  /// Whether to show a link to the block explorer
+  final bool showBlockExplorerLink;
+  
+  /// URL of the block explorer (e.g., 'https://snowtrace.io/tx/')
+  final String? blockExplorerUrl;
 
   const TransactionStatusWidget({
     super.key,
     required this.transaction,
     this.compact = true,
+    this.useWebStyling = false,
+    this.showBlockExplorerLink = false,
+    this.blockExplorerUrl,
   });
 
   @override
@@ -149,6 +164,21 @@ class TransactionStatusWidget extends StatelessWidget {
                 child: Text(
                   'Error: ${transaction.error}',
                   style: TextStyle(color: Colors.red[700]),
+                ),
+              ),
+            
+            // Block explorer link
+            if (showBlockExplorerLink && blockExplorerUrl != null && transaction.txHash != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: TextButton(
+                  onPressed: () {
+                    // Open block explorer link
+                  },
+                  child: Text(
+                    'View on ${blockExplorerUrl!.split('/').last}',
+                    style: TextStyle(color: Colors.blue),
+                  ),
                 ),
               ),
           ],

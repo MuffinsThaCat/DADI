@@ -6,10 +6,17 @@ import 'wallet_service_mobile.dart';
 import 'meta_transaction_service.dart';
 import 'auction_service_meta.dart';
 import 'transaction_websocket_service.dart';
+import 'transaction_websocket_service_factory.dart';
 
 /// Factory for creating service instances
 /// This centralizes service creation and configuration
 class ServiceFactory {
+  /// Default relayer URL
+  static const String DEFAULT_RELAYER_URL = 'https://relayer.dadi.network';
+  
+  /// Default WebSocket URL
+  static const String DEFAULT_WEBSOCKET_URL = 'wss://relayer.dadi.network/ws';
+  
   /// Create a wallet service based on platform
   static WalletServiceInterface createWalletService({String? rpcUrl}) {
     final defaultRpcUrl = 'https://api.avax.network/ext/bc/C/rpc';
@@ -33,7 +40,7 @@ class ServiceFactory {
     // Create WebSocket service if URL is provided
     TransactionWebSocketService? webSocketService;
     if (webSocketUrl != null) {
-      webSocketService = TransactionWebSocketService(
+      webSocketService = TransactionWebSocketServiceFactory.create(
         webSocketUrl: webSocketUrl,
         reconnectIntervalMs: 5000,
         maxReconnectAttempts: 10,

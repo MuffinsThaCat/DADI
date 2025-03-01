@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:meta/meta.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
@@ -115,11 +116,11 @@ class TransactionWebSocketService {
     }
     
     try {
-      await _connectWebSocket();
+      await connectWebSocket();
       _isInitialized = true;
     } catch (e) {
       debugPrint('Failed to initialize WebSocket connection: $e');
-      _scheduleReconnect();
+      scheduleReconnect();
     }
   }
   
@@ -190,20 +191,21 @@ class TransactionWebSocketService {
   }
   
   /// Connect to the WebSocket server
-  Future<void> _connectWebSocket() async {
+  @protected
+  Future<void> connectWebSocket() async {
     try {
       _channel = _webSocketChannelFactory(Uri.parse(_webSocketUrl));
       
       // Listen for incoming messages
       _channel!.stream.listen(
-        (message) => _handleWebSocketMessage(message),
+        (message) => handleWebSocketMessage(message),
         onError: (error) {
           debugPrint('WebSocket error: $error');
-          _scheduleReconnect();
+          scheduleReconnect();
         },
         onDone: () {
           debugPrint('WebSocket connection closed');
-          _scheduleReconnect();
+          scheduleReconnect();
         },
       );
       
@@ -212,12 +214,13 @@ class TransactionWebSocketService {
       debugPrint('Connected to transaction status WebSocket');
     } catch (e) {
       debugPrint('Failed to connect to WebSocket: $e');
-      _scheduleReconnect();
+      scheduleReconnect();
     }
   }
   
   /// Handle incoming WebSocket messages
-  void _handleWebSocketMessage(dynamic message) {
+  @protected
+  void handleWebSocketMessage(dynamic message) {
     try {
       final Map<String, dynamic> data = jsonDecode(message);
       
@@ -226,7 +229,7 @@ class TransactionWebSocketService {
         final statusStr = data['status'] as String;
         
         // Parse the status
-        final status = _parseTransactionStatus(statusStr);
+        final status = parseTransactionStatus(statusStr);
         
         // Create the update
         final update = TransactionStatusUpdate(
@@ -255,7 +258,8 @@ class TransactionWebSocketService {
   }
   
   /// Parse transaction status string to enum
-  TransactionStatus _parseTransactionStatus(String status) {
+  @protected
+  TransactionStatus parseTransactionStatus(String status) {
     switch (status.toLowerCase()) {
       case 'submitted':
         return TransactionStatus.submitted;
@@ -273,7 +277,8 @@ class TransactionWebSocketService {
   }
   
   /// Schedule a reconnection attempt
-  void _scheduleReconnect() {
+  @protected
+  void scheduleReconnect() {
     // Cancel any existing reconnect timer
     _reconnectTimer?.cancel();
     
@@ -290,7 +295,7 @@ class TransactionWebSocketService {
       Duration(milliseconds: _reconnectIntervalMs),
       () async {
         debugPrint('Attempting to reconnect (attempt $_reconnectAttempts)');
-        await _connectWebSocket();
+        await connectWebSocket();
       },
     );
   }
@@ -308,4 +313,16 @@ class TransactionWebSocketService {
       debugPrint('Error sending WebSocket message: $e');
     }
   }
+
+  /// Get the WebSocket channel (for subclasses)
+  @protected
+  WebSocketChannel? get channel => _channel;
+
+  /// Get transaction callbacks map (for subclasses)
+  @protected
+  Map<String, TransactionStatusCallback> get transactionCallbacks => _txCallbacks;
+
+  /// Get user callbacks map (for subclasses)
+  @protected
+  Map<String, TransactionStatusCallback> get userCallbacks => _userCallbacks;
 }

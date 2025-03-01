@@ -2,7 +2,7 @@
 import 'dart:developer' as developer;
 import 'dart:convert'; 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_web3/flutter_web3.dart';
+import 'flutter_web3.dart';
 import '../contracts/dadi_auction.dart';
 import '../models/auction.dart';
 import '../models/operation_result.dart';
@@ -135,9 +135,9 @@ class Web3Service extends ChangeNotifier {
       if (Ethereum.isSupported) {
         _log('Ethereum is supported in this browser');
         
-        if (ethereum != null) {
+        if (Ethereum.ethereum != null) {
           _log('Ethereum provider is available');
-          _log('Provider type: ${ethereum.runtimeType}');
+          _log('Provider type: ${Ethereum.ethereum.runtimeType}');
           
           // Check if MetaMask is installed
           try {
@@ -151,7 +151,7 @@ class Web3Service extends ChangeNotifier {
           
           // Try to get chain ID
           try {
-            ethereum!.getChainId().then((chainId) {
+            Ethereum.ethereum!.getChainId().then((chainId) {
               _log('Current chain ID: $chainId');
               
               // Check if it's the expected Hardhat chain ID
@@ -201,7 +201,7 @@ class Web3Service extends ChangeNotifier {
       _log('Connecting to Web3...');
       
       // Check if ethereum is available
-      if (ethereum == null) {
+      if (Ethereum.ethereum == null) {
         _log('Ethereum provider not available, falling back to local RPC');
         
         try {
@@ -225,7 +225,7 @@ class Web3Service extends ChangeNotifier {
         // Connect to ethereum
         try {
           _log('Ethereum provider available, requesting accounts...');
-          final accs = await ethereum!.requestAccount();
+          final accs = await Ethereum.ethereum!.requestAccount();
           if (accs.isEmpty) {
             _log('No accounts returned from wallet');
             return false;
@@ -236,7 +236,7 @@ class Web3Service extends ChangeNotifier {
           
           // Initialize provider
           _log('Creating Web3Provider from ethereum');
-          _provider = Web3Provider(ethereum!);
+          _provider = Web3Provider(Ethereum.ethereum!);
           _log('Web3Provider created successfully');
           
           // Test the provider by getting the network
@@ -358,7 +358,7 @@ class Web3Service extends ChangeNotifier {
         // Try to call a simple view function to verify contract connection
         try {
           _log('Testing contract connection...');
-          final result = await _contract!.call('owner');
+          final result = await _contract!.call('owner', []);
           _log('Contract connection successful. Owner: $result');
         } catch (e) {
           _log('Error testing contract connection:', error: e);
@@ -447,7 +447,7 @@ class Web3Service extends ChangeNotifier {
       
       try {
         // Get auction count
-        final auctionCount = await _contract!.call('getAuctionCount');
+        final auctionCount = await _contract!.call('getAuctionCount', []);
         _log('Total auction count: $auctionCount');
         
         if (auctionCount > BigInt.zero) {
@@ -594,7 +594,7 @@ class Web3Service extends ChangeNotifier {
       
       // Set value for the transaction
       final overrides = TransactionOverride(
-        value: amountWei,
+        value: BigNumber.from(amountWei),
       );
       
       // Call the contract method
@@ -668,7 +668,7 @@ class Web3Service extends ChangeNotifier {
         'placeBid',
         [bytes32DeviceId],
         TransactionOverride(
-          value: bidWei,
+          value: BigNumber.from(bidWei),
         ),
       );
       
@@ -867,7 +867,7 @@ class Web3Service extends ChangeNotifier {
       }
       
       // Call a simple view function to test the contract
-      final count = await _contract!.call('getAuctionCount');
+      final count = await _contract!.call('getAuctionCount', []);
       _log('Contract test successful. Auction count: $count');
       return true;
     } catch (e) {
@@ -920,7 +920,7 @@ class Web3Service extends ChangeNotifier {
     if (isMockMode) return true;
     
     try {
-      return ethereum != null;
+      return Ethereum.ethereum != null;
     } catch (e) {
       _log('Error checking MetaMask availability: $e');
       return false;
@@ -1146,7 +1146,7 @@ class Web3Service extends ChangeNotifier {
       _log('Ethereum is supported, checking if ethereum object exists');
       
       // Then check if the ethereum object exists
-      if (ethereum == null) {
+      if (Ethereum.ethereum == null) {
         _log('Ethereum object not found, using JsonRpcProvider');
         result['supported'] = true;
         result['message'] = 'Using direct RPC connection (no wallet)';
@@ -1177,7 +1177,7 @@ class Web3Service extends ChangeNotifier {
       result['supported'] = true;
       
       // Check if MetaMask is connected
-      final isMetaMaskConnectedObj = ethereum != null ? ethereum!.isConnected : false;
+      final isMetaMaskConnectedObj = Ethereum.ethereum != null ? Ethereum.ethereum!.isConnected : false;
       final bool isMetaMaskConnected = isMetaMaskConnectedObj is bool ? isMetaMaskConnectedObj : false;
       result['connected'] = isMetaMaskConnected;
       
@@ -1188,7 +1188,7 @@ class Web3Service extends ChangeNotifier {
       
       // Get chain ID
       try {
-        final chainId = await ethereum!.getChainId();
+        final chainId = await Ethereum.ethereum!.getChainId();
         result['chainId'] = chainId;
         
         // Determine network name based on chain ID
@@ -1223,7 +1223,7 @@ class Web3Service extends ChangeNotifier {
           result['account'] = _currentAddress;
         } else {
           try {
-            final accounts = await ethereum!.getAccounts();
+            final accounts = await Ethereum.ethereum!.getAccounts();
             if (accounts.isNotEmpty) {
               result['account'] = accounts[0];
             } else {

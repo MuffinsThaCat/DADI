@@ -70,8 +70,23 @@ class WalletTransactionList extends StatelessWidget {
     // final from = transaction['from'] as String;
     // final to = transaction['to'] as String;
     final value = transaction['value'] as double;
-    final status = TransactionStatus.values[transaction['status'] as int];
-    final type = TransactionType.values[transaction['type'] as int];
+    
+    // Convert string status to enum
+    final statusStr = transaction['status'] as String;
+    final TransactionStatus status = statusStr == 'confirmed' 
+        ? TransactionStatus.confirmed 
+        : statusStr == 'failed' 
+            ? TransactionStatus.failed 
+            : TransactionStatus.pending;
+    
+    // Convert string type to enum
+    final typeStr = transaction['type'] as String;
+    final TransactionType type = typeStr == 'send' 
+        ? TransactionType.send 
+        : typeStr == 'contractCall' 
+            ? TransactionType.contractCall 
+            : TransactionType.receive;
+            
     final timestamp = DateTime.parse(transaction['timestamp'] as String);
     
     // Format timestamp
@@ -225,8 +240,18 @@ class WalletTransactionList extends StatelessWidget {
     final from = transaction['from'] as String;
     final to = transaction['to'] as String;
     final value = transaction['value'] as double;
-    final status = TransactionStatus.values[transaction['status'] as int];
-    final type = TransactionType.values[transaction['type'] as int];
+    final statusStr = transaction['status'] as String;
+    final TransactionStatus status = statusStr == 'confirmed' 
+        ? TransactionStatus.confirmed 
+        : statusStr == 'failed' 
+            ? TransactionStatus.failed 
+            : TransactionStatus.pending;
+    final typeStr = transaction['type'] as String;
+    final TransactionType type = typeStr == 'send' 
+        ? TransactionType.send 
+        : typeStr == 'contractCall' 
+            ? TransactionType.contractCall 
+            : TransactionType.receive;
     final timestamp = DateTime.parse(transaction['timestamp'] as String);
     
     // Format timestamp
