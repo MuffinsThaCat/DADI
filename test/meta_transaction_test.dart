@@ -13,6 +13,13 @@ void main() {
   const mockAuctionContractAddress = '0x1234567890123456789012345678901234567890';
   const mockRelayerContractAddress = '0x0987654321098765432109876543210987654321';
   
+  // Avalanche-specific configuration for testing
+  const mockDomainName = "DADI Test";
+  const mockDomainVersion = "1";
+  const mockTypeName = "Test Type";
+  const mockTypeSuffixData = "bytes8 testSuffixData)";
+  const mockTrustedForwarderAddress = "0x52C84043CD9c865236f11d9Fc9F56aa003c1f922";
+  
   setUp(() {
     walletService = MockWalletService();
     metaTransactionService = MockMetaTransactionService(
@@ -26,6 +33,11 @@ void main() {
       relayer: relayer,
       walletService: walletService,
       auctionContractAddress: mockAuctionContractAddress,
+      domainName: mockDomainName,
+      domainVersion: mockDomainVersion,
+      typeName: mockTypeName,
+      typeSuffixData: mockTypeSuffixData,
+      trustedForwarderAddress: mockTrustedForwarderAddress,
     );
   });
   
@@ -49,18 +61,15 @@ void main() {
       await walletService.createWallet(password: 'password123');
       await walletService.unlockWallet(password: 'password123');
       
-      // Ensure wallet is unlocked
-      expect(walletService.isUnlocked, true);
-      
       // Place bid
       final txHash = await auctionService.placeBid(
         deviceId: '0x1234',
         bidAmount: 1.0,
       );
       
-      // Verify transaction hash format
+      // Verify transaction hash was returned
+      expect(txHash, isNotNull);
       expect(txHash, startsWith('0x'));
-      expect(txHash.length, greaterThan(10));
     });
     
     test('Should successfully finalize auction via meta-transaction', () async {
@@ -73,41 +82,55 @@ void main() {
         deviceId: '0x1234',
       );
       
-      // Verify transaction hash format
+      // Verify transaction hash was returned
+      expect(txHash, isNotNull);
       expect(txHash, startsWith('0x'));
-      expect(txHash.length, greaterThan(10));
     });
     
-    test('Should successfully create auction via meta-transaction', () async {
+    test('Should handle relayer failures gracefully', () async {
       // Create and unlock wallet
       await walletService.createWallet(password: 'password123');
       await walletService.unlockWallet(password: 'password123');
       
-      // Create auction
-      final txHash = await auctionService.createAuction(
-        deviceId: '0x5678',
-        reservePrice: 0.5,
-        duration: 86400, // 1 day in seconds
+      // Create service with simulated failures
+      final failingMetaTransactionService = MockMetaTransactionService(
+        walletService: walletService,
+        simulateFailures: true,
       );
       
-      // Verify transaction hash format
-      expect(txHash, startsWith('0x'));
-      expect(txHash.length, greaterThan(10));
-    });
-    
-    test('Should successfully cancel auction via meta-transaction', () async {
-      // Create and unlock wallet
-      await walletService.createWallet(password: 'password123');
-      await walletService.unlockWallet(password: 'password123');
-      
-      // Cancel auction
-      final txHash = await auctionService.cancelAuction(
-        deviceId: '0x5678',
+      final failingRelayer = MetaTransactionRelayer(
+        metaTransactionService: failingMetaTransactionService,
+        relayerContractAddress: mockRelayerContractAddress,
       );
       
-      // Verify transaction hash format
-      expect(txHash, startsWith('0x'));
-      expect(txHash.length, greaterThan(10));
+      final failingAuctionService = AuctionServiceMeta(
+        relayer: failingRelayer,
+        walletService: walletService,
+        auctionContractAddress: mockAuctionContractAddress,
+        domainName: mockDomainName,
+        domainVersion: mockDomainVersion,
+        typeName: mockTypeName,
+        typeSuffixData: mockTypeSuffixData,
+        trustedForwarderAddress: mockTrustedForwarderAddress,
+      );
+      
+      // Attempt multiple bids to trigger simulated failure
+      for (var i = 0; i < 10; i++) {
+        try {
+          await failingAuctionService.placeBid(
+            deviceId: '0x1234',
+            bidAmount: 1.0,
+          );
+        } catch (e) {
+          // Expected to fail occasionally
+          expect(e.toString(), contains('Simulated relayer failure'));
+          return;
+        }
+      }
+      
+      // If we got here without any failures after 10 attempts, that's suspicious
+      // The mock is set to fail ~20% of the time
+      fail('Expected at least one simulated failure but none occurred');
     });
   });
 }

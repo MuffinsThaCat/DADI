@@ -4,11 +4,18 @@ import 'package:http/http.dart' as http;
 import 'package:web3dart/crypto.dart';
 import 'wallet_service_interface.dart';
 
-/// Service for handling gasless meta-transactions
+/// Service for handling gasless meta-transactions on Avalanche
 /// This allows users to interact with smart contracts without paying gas fees
+/// Based on Avalanche EVM Gasless Transaction implementation
 class MetaTransactionService {
   final String _relayerUrl;
   final WalletServiceInterface _walletService;
+  
+  // Avalanche C-Chain ID
+  static const int _avalancheCChainId = 43114; // 0xa86a in hex
+  
+  // Default gas limit for meta-transactions
+  static const int _defaultGasLimit = 500000;
   
   /// Constructor
   MetaTransactionService({
@@ -20,10 +27,17 @@ class MetaTransactionService {
   /// Execute a meta-transaction through a relayer
   /// The relayer will pay the gas fees on behalf of the user
   Future<String> executeMetaTransaction({
+    required String trustedForwarderAddress,
     required String contractAddress,
     required String functionSignature,
     required List<dynamic> functionParams,
+    required String domainName,
+    required String domainVersion,
+    String? typeName,
+    String? typeSuffixData,
     int? nonce,
+    int? gasLimit,
+    int? validUntilTime,
   }) async {
     if (!_walletService.isUnlocked) {
       throw Exception('Wallet must be unlocked to execute meta-transactions');
@@ -36,37 +50,55 @@ class MetaTransactionService {
     
     try {
       // Get nonce if not provided
-      final actualNonce = nonce ?? await _getNonce(userAddress, contractAddress);
+      final actualNonce = nonce ?? await _getNonce(userAddress, trustedForwarderAddress);
       
       // Prepare function data
       final functionData = _encodeFunctionCall(functionSignature, functionParams);
       
-      // Prepare meta-transaction data
+      // Prepare meta-transaction data according to Avalanche's implementation
       final metaTxData = {
         'from': userAddress,
         'to': contractAddress,
-        'nonce': actualNonce,
+        'value': '0x0', // No value transfer
+        'gas': '0x${(gasLimit ?? _defaultGasLimit).toRadixString(16)}',
+        'nonce': '0x${actualNonce.toRadixString(16)}',
         'data': functionData,
+        'validUntilTime': validUntilTime != null 
+            ? '0x${validUntilTime.toRadixString(16)}'
+            : '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', // Max uint256
       };
       
       // Create typed data for EIP-712 signing
-      final typedData = _createTypedData(metaTxData, contractAddress);
+      final typedData = _createTypedData(
+        metaTxData, 
+        trustedForwarderAddress,
+        domainName,
+        domainVersion,
+        typeName ?? 'my type name',
+        typeSuffixData ?? 'bytes8 typeSuffixDatadatadatada)',
+      );
       
       // Sign the typed data
       final signature = await _walletService.signTypedData(typedData: typedData);
       
+      // Format the request according to Avalanche's gas relayer expectations
+      final request = {
+        'forwardRequest': {
+          'domain': typedData['domain'],
+          'types': typedData['types'],
+          'primaryType': typedData['primaryType'],
+          'message': metaTxData,
+        },
+        'metadata': {
+          'signature': signature,
+        },
+      };
+      
       // Send the meta-transaction to the relayer
       final response = await http.post(
-        Uri.parse('$_relayerUrl/execute'),
+        Uri.parse('$_relayerUrl/rpc-sync'), // Avalanche relayer endpoint
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'from': userAddress,
-          'to': contractAddress,
-          'nonce': actualNonce,
-          'functionSignature': functionSignature,
-          'functionParams': functionParams,
-          'signature': signature,
-        }),
+        body: jsonEncode(request),
       );
       
       if (response.statusCode != 200) {
@@ -82,10 +114,12 @@ class MetaTransactionService {
   }
   
   /// Get the current nonce for a user on a specific contract
-  Future<int> _getNonce(String userAddress, String contractAddress) async {
+  Future<int> _getNonce(String userAddress, String trustedForwarderAddress) async {
     try {
+      // For Avalanche's implementation, we need to get the nonce from the forwarder contract
+      // This is a simplified implementation - in production, you would make an eth_call to the forwarder
       final response = await http.get(
-        Uri.parse('$_relayerUrl/nonce?address=$userAddress&contract=$contractAddress'),
+        Uri.parse('$_relayerUrl/nonce?address=$userAddress&forwarder=$trustedForwarderAddress'),
       );
       
       if (response.statusCode != 200) {
@@ -93,7 +127,7 @@ class MetaTransactionService {
       }
       
       final responseData = jsonDecode(response.body);
-      return responseData['nonce'];
+      return int.parse(responseData['nonce'].toString());
     } catch (e) {
       debugPrint('Error getting nonce: $e');
       throw Exception('Failed to get nonce: ${e.toString()}');
@@ -112,8 +146,15 @@ class MetaTransactionService {
     return '0x$selectorHex';
   }
   
-  /// Create typed data for EIP-712 signing
-  Map<String, dynamic> _createTypedData(Map<String, dynamic> metaTxData, String contractAddress) {
+  /// Create typed data for EIP-712 signing according to Avalanche's implementation
+  Map<String, dynamic> _createTypedData(
+    Map<String, dynamic> metaTxData, 
+    String trustedForwarderAddress,
+    String domainName,
+    String domainVersion,
+    String typeName,
+    String typeSuffixData,
+  ) {
     return {
       'types': {
         'EIP712Domain': [
@@ -122,19 +163,22 @@ class MetaTransactionService {
           {'name': 'chainId', 'type': 'uint256'},
           {'name': 'verifyingContract', 'type': 'address'},
         ],
-        'MetaTransaction': [
+        'Message': [
           {'name': 'from', 'type': 'address'},
           {'name': 'to', 'type': 'address'},
+          {'name': 'value', 'type': 'uint256'},
+          {'name': 'gas', 'type': 'uint256'},
           {'name': 'nonce', 'type': 'uint256'},
           {'name': 'data', 'type': 'bytes'},
+          {'name': 'validUntilTime', 'type': 'uint256'},
         ],
       },
-      'primaryType': 'MetaTransaction',
+      'primaryType': 'Message',
       'domain': {
-        'name': 'DADI Auction',
-        'version': '1',
-        'chainId': 1, // Replace with actual chain ID
-        'verifyingContract': contractAddress,
+        'name': domainName,
+        'version': domainVersion,
+        'chainId': _avalancheCChainId, // Avalanche C-Chain ID
+        'verifyingContract': trustedForwarderAddress,
       },
       'message': metaTxData,
     };

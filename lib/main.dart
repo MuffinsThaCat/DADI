@@ -4,7 +4,11 @@ import 'services/web3_service.dart';
 import 'services/mock_buttplug_service.dart';
 import 'services/wallet_service_interface.dart';
 import 'services/wallet_service_factory.dart';
+import 'services/meta_transaction_service.dart';
+import 'contracts/meta_transaction_relayer.dart';
+import 'providers/meta_transaction_provider.dart';
 import 'screens/home_screen_new.dart';
+import 'screens/meta_transaction_screen.dart';
 import 'dart:developer' as developer;
 import 'theme/app_theme.dart';
 
@@ -32,6 +36,34 @@ void main() async {
   // Initialize WalletService
   final walletService = WalletServiceFactory.createWalletService();
   _log('Wallet service initialized');
+  
+  // Initialize Avalanche Meta-Transaction Services
+  final metaTransactionService = MetaTransactionService(
+    relayerUrl: 'https://relayer.dadi.network', // Replace with actual Avalanche relayer URL
+    walletService: walletService,
+  );
+  
+  // Avalanche trusted forwarder contract address
+  const trustedForwarderAddress = '0x52C84043CD9c865236f11d9Fc9F56aa003c1f922'; // Replace with actual deployed address
+  
+  // Initialize Meta-Transaction Relayer
+  final metaTransactionRelayer = MetaTransactionRelayer(
+    metaTransactionService: metaTransactionService,
+    relayerContractAddress: trustedForwarderAddress,
+  );
+  
+  // Initialize Meta-Transaction Provider with Avalanche parameters
+  final metaTransactionProvider = MetaTransactionProvider(
+    metaTransactionService: metaTransactionService,
+    relayer: metaTransactionRelayer,
+    domainName: 'DADI Auction', // Domain name registered with the forwarder
+    domainVersion: '1', // Domain version registered with the forwarder
+    typeName: 'my type name', // Type name registered with the forwarder
+    typeSuffixData: 'bytes8 typeSuffixDatadatadatada)', // Type suffix registered with the forwarder
+    trustedForwarderAddress: trustedForwarderAddress,
+  );
+  
+  _log('Meta-transaction services initialized for Avalanche');
   
   // Check Ethereum provider status
   _log('Checking Ethereum provider status...');
@@ -102,17 +134,20 @@ void main() async {
   runApp(MyApp(
     web3Service: web3Service,
     walletService: walletService,
+    metaTransactionProvider: metaTransactionProvider,
   ));
 }
 
 class MyApp extends StatelessWidget {
   final Web3Service web3Service;
   final WalletServiceInterface walletService;
+  final MetaTransactionProvider metaTransactionProvider;
   
   const MyApp({
     super.key, 
     required this.web3Service,
     required this.walletService,
+    required this.metaTransactionProvider,
   });
 
   @override
@@ -121,12 +156,16 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider.value(value: web3Service),
         ChangeNotifierProvider.value(value: walletService),
+        ChangeNotifierProvider.value(value: metaTransactionProvider),
         ChangeNotifierProvider(create: (_) => MockButtplugService()),
       ],
       child: MaterialApp(
         title: 'DADI',
         theme: AppTheme.lightTheme, // Use our new theme
         home: const HomeScreenNew(), // Update the home screen
+        routes: {
+          MetaTransactionScreen.routeName: (ctx) => const MetaTransactionScreen(),
+        },
       ),
     );
   }

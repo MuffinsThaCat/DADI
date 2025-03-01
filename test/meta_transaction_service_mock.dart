@@ -8,26 +8,32 @@ class MockMetaTransactionService extends MetaTransactionService {
   final bool delayInitialization;
   final bool simulateFailures;
   final Map<String, int> _nonces = {};
-  late final WalletServiceInterface walletService;
+  final WalletServiceInterface _mockWalletService;
   
   /// Constructor
   MockMetaTransactionService({
     this.delayInitialization = false,
     this.simulateFailures = false,
     required WalletServiceInterface walletService,
-  }) : super(
+  }) : _mockWalletService = walletService,
+       super(
          relayerUrl: 'https://mock-relayer.example.com',
          walletService: walletService,
-       ) {
-    this.walletService = walletService;
-  }
+       );
   
   @override
   Future<String> executeMetaTransaction({
+    required String trustedForwarderAddress,
     required String contractAddress,
     required String functionSignature,
     required List<dynamic> functionParams,
+    required String domainName,
+    required String domainVersion,
+    String? typeName,
+    String? typeSuffixData,
     int? nonce,
+    int? gasLimit,
+    int? validUntilTime,
   }) async {
     if (delayInitialization) {
       await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
@@ -37,30 +43,32 @@ class MockMetaTransactionService extends MetaTransactionService {
       throw Exception('Simulated relayer failure');
     }
     
-    // Get the wallet service from the parent class
-    if (!walletService.isUnlocked) {
+    // Check if wallet is unlocked
+    if (!_mockWalletService.isUnlocked) {
       throw Exception('Wallet is locked');
     }
     
-    final userAddress = walletService.currentAddress;
+    final userAddress = _mockWalletService.currentAddress;
     if (userAddress == null) {
       throw Exception('No wallet address available');
     }
     
     // Get or increment nonce
     final nonceKey = '$userAddress:$contractAddress';
-    _nonces[nonceKey] = (_nonces[nonceKey] ?? 0) + 1;
+    final actualNonce = nonce ?? (_nonces[nonceKey] ?? 0);
+    _nonces[nonceKey] = actualNonce + 1;
     
     // Generate a mock transaction hash
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final randomSuffix = Random().nextInt(1000000).toString().padLeft(6, '0');
-    final txHash = '0x${timestamp.toRadixString(16)}$randomSuffix';
+    final txHash = '0x${List.generate(64, (index) => 
+      '0123456789abcdef'[Random().nextInt(16)]).join('')}';
     
     debugPrint('Mock meta-transaction executed: $txHash');
     debugPrint('  Contract: $contractAddress');
     debugPrint('  Function: $functionSignature');
     debugPrint('  Params: $functionParams');
-    debugPrint('  Nonce: ${_nonces[nonceKey]}');
+    debugPrint('  Nonce: $actualNonce');
+    debugPrint('  Domain: $domainName v$domainVersion');
+    debugPrint('  Forwarder: $trustedForwarderAddress');
     
     return txHash;
   }

@@ -2,17 +2,15 @@ import '../services/meta_transaction_service.dart';
 import '../services/wallet_service_interface.dart';
 // Note: BigInt is used in the estimateGasCost method
 
-/// Interface for interacting with the meta-transaction relayer contract
+/// Interface for interacting with the meta-transaction relayer contract on Avalanche
 class MetaTransactionRelayer {
   final MetaTransactionService _metaTransactionService;
-  final String _relayerContractAddress;
   
   /// Constructor
   MetaTransactionRelayer({
     required MetaTransactionService metaTransactionService,
-    required String relayerContractAddress,
-  }) : _metaTransactionService = metaTransactionService,
-       _relayerContractAddress = relayerContractAddress;
+    required String relayerContractAddress, // Kept for backward compatibility
+  }) : _metaTransactionService = metaTransactionService;
   
   /// Execute a contract function call as a meta-transaction
   /// This allows users to interact with contracts without paying gas fees
@@ -20,19 +18,31 @@ class MetaTransactionRelayer {
     required String targetContract,
     required String functionSignature,
     required List<dynamic> functionParams,
+    required String domainName,
+    required String domainVersion,
+    required String typeName,
+    required String typeSuffixData,
+    required String trustedForwarderAddress,
+    int? gasLimit,
+    int? validUntilTime,
   }) async {
     try {
+      // For Avalanche's implementation, we directly call the target contract
+      // through the trusted forwarder
       return await _metaTransactionService.executeMetaTransaction(
-        contractAddress: _relayerContractAddress,
-        functionSignature: 'executeMetaTransaction(address,bytes,bytes)',
-        functionParams: [
-          targetContract,
-          functionSignature,
-          functionParams,
-        ],
+        trustedForwarderAddress: trustedForwarderAddress,
+        contractAddress: targetContract,
+        functionSignature: functionSignature,
+        functionParams: functionParams,
+        domainName: domainName,
+        domainVersion: domainVersion,
+        typeName: typeName,
+        typeSuffixData: typeSuffixData,
+        gasLimit: gasLimit,
+        validUntilTime: validUntilTime,
       );
     } catch (e) {
-      throw Exception('Failed to execute function via relayer: ${e.toString()}');
+      throw Exception('Failed to execute function via Avalanche relayer: ${e.toString()}');
     }
   }
   
@@ -49,27 +59,21 @@ class MetaTransactionRelayer {
     try {
       // This would be an actual contract call in a real implementation
       // For now, we'll simulate it
-      await Future.delayed(const Duration(milliseconds: 300));
       return true;
     } catch (e) {
       throw Exception('Failed to check quota: ${e.toString()}');
     }
   }
   
-  /// Get the estimated gas cost that the relayer would pay
-  /// This is useful for informational purposes
+  /// Estimate the gas cost for a meta-transaction
+  /// This is useful for displaying to users how much they're saving
   Future<BigInt> estimateGasCost({
     required String targetContract,
     required String functionSignature,
     required List<dynamic> functionParams,
   }) async {
-    try {
-      // This would be an actual contract call in a real implementation
-      // For now, we'll simulate it
-      await Future.delayed(const Duration(milliseconds: 300));
-      return BigInt.from(100000); // Simulated gas cost
-    } catch (e) {
-      throw Exception('Failed to estimate gas cost: ${e.toString()}');
-    }
+    // This would be an actual gas estimation in a real implementation
+    // For now, we'll return a fixed value
+    return BigInt.from(500000);
   }
 }

@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/auction_service_meta.dart';
-import '../contracts/meta_transaction_relayer.dart';
-import '../services/meta_transaction_service.dart';
-import '../services/wallet_service_interface.dart';
+import '../providers/meta_transaction_provider.dart';
 
 /// Widget for interacting with auctions using gasless meta-transactions
 class GaslessAuctionWidget extends StatefulWidget {
@@ -60,26 +57,17 @@ class _GaslessAuctionWidgetState extends State<GaslessAuctionWidget> {
     });
     
     try {
-      final walletService = Provider.of<WalletServiceInterface>(context, listen: false);
-      final metaTransactionService = MetaTransactionService(
-        relayerUrl: 'https://relayer.dadi.network/relay',
-        walletService: walletService,
-      );
+      final metaProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
       
-      final relayer = MetaTransactionRelayer(
-        metaTransactionService: metaTransactionService,
-        relayerContractAddress: '0x1234567890123456789012345678901234567890', // Replace with actual address
-      );
-      
-      final auctionService = AuctionServiceMeta(
-        relayer: relayer,
-        walletService: walletService,
-        auctionContractAddress: '0x0987654321098765432109876543210987654321', // Replace with actual address
-      );
-      
-      final txHash = await auctionService.placeBid(
-        deviceId: widget.deviceId,
-        bidAmount: bidAmount,
+      // Execute the transaction via the provider
+      final txHash = await metaProvider.executeFunction(
+        targetContract: '0x0987654321098765432109876543210987654321', // Auction contract
+        functionSignature: 'placeBid(bytes32,uint256)',
+        functionParams: [
+          widget.deviceId,
+          (bidAmount * 1e18).toString(), // Convert to wei
+        ],
+        description: 'Bid ${bidAmount.toStringAsFixed(4)} ETH on ${widget.deviceId}',
       );
       
       setState(() {
@@ -102,25 +90,14 @@ class _GaslessAuctionWidgetState extends State<GaslessAuctionWidget> {
     });
     
     try {
-      final walletService = Provider.of<WalletServiceInterface>(context, listen: false);
-      final metaTransactionService = MetaTransactionService(
-        relayerUrl: 'https://relayer.dadi.network/relay',
-        walletService: walletService,
-      );
+      final metaProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
       
-      final relayer = MetaTransactionRelayer(
-        metaTransactionService: metaTransactionService,
-        relayerContractAddress: '0x1234567890123456789012345678901234567890', // Replace with actual address
-      );
-      
-      final auctionService = AuctionServiceMeta(
-        relayer: relayer,
-        walletService: walletService,
-        auctionContractAddress: '0x0987654321098765432109876543210987654321', // Replace with actual address
-      );
-      
-      final txHash = await auctionService.finalizeAuction(
-        deviceId: widget.deviceId,
+      // Execute the transaction via the provider
+      final txHash = await metaProvider.executeFunction(
+        targetContract: '0x0987654321098765432109876543210987654321', // Auction contract
+        functionSignature: 'finalizeAuction(bytes32)',
+        functionParams: [widget.deviceId],
+        description: 'Finalize auction for ${widget.deviceId}',
       );
       
       setState(() {
@@ -137,6 +114,10 @@ class _GaslessAuctionWidgetState extends State<GaslessAuctionWidget> {
   
   @override
   Widget build(BuildContext context) {
+    // Get quota information from provider
+    final metaProvider = Provider.of<MetaTransactionProvider>(context);
+    final hasQuota = metaProvider.hasQuotaAvailable;
+    
     return Card(
       elevation: 4,
       margin: const EdgeInsets.all(16),
@@ -178,7 +159,7 @@ class _GaslessAuctionWidgetState extends State<GaslessAuctionWidget> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _placeBid,
+                  onPressed: (!hasQuota || _isLoading) ? null : _placeBid,
                   child: _isLoading
                       ? const SizedBox(
                           height: 20,
@@ -188,19 +169,50 @@ class _GaslessAuctionWidgetState extends State<GaslessAuctionWidget> {
                       : const Text('Place Gasless Bid'),
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                '* No gas fees required - powered by meta-transactions',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  fontStyle: FontStyle.italic,
+              if (!hasQuota && !_isLoading) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  color: Colors.amber.shade100,
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning, color: Colors.amber.shade900, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Daily gasless transaction quota exceeded. Please try again tomorrow or use a regular transaction.',
+                          style: TextStyle(color: Colors.amber.shade900, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+              ],
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.info_outline, size: 14),
+                  const SizedBox(width: 4),
+                  Text(
+                    'No gas fees required - powered by meta-transactions',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pushNamed('/meta-transactions');
+                },
+                child: const Text('View Transaction History'),
               ),
             ],
             if (widget.isActive && widget.isOwner) ...[
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _finalizeAuction,
+                  onPressed: (!hasQuota || _isLoading) ? null : _finalizeAuction,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.amber,
                   ),
@@ -213,6 +225,25 @@ class _GaslessAuctionWidgetState extends State<GaslessAuctionWidget> {
                       : const Text('Finalize Auction (Gasless)'),
                 ),
               ),
+              if (!hasQuota && !_isLoading) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  color: Colors.amber.shade100,
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning, color: Colors.amber.shade900, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Daily gasless transaction quota exceeded. Please try again tomorrow or use a regular transaction.',
+                          style: TextStyle(color: Colors.amber.shade900, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ],
             if (_errorMessage != null) ...[
               const SizedBox(height: 16),

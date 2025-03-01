@@ -9,14 +9,31 @@ class AuctionServiceMeta {
   final WalletServiceInterface _walletService;
   final String _auctionContractAddress;
   
+  // Avalanche-specific configuration
+  final String _domainName;
+  final String _domainVersion;
+  final String _typeName;
+  final String _typeSuffixData;
+  final String _trustedForwarderAddress;
+  
   /// Constructor
   AuctionServiceMeta({
     required MetaTransactionRelayer relayer,
     required WalletServiceInterface walletService,
     required String auctionContractAddress,
+    required String domainName,
+    required String domainVersion,
+    required String typeName,
+    required String typeSuffixData,
+    required String trustedForwarderAddress,
   }) : _relayer = relayer,
        _walletService = walletService,
-       _auctionContractAddress = auctionContractAddress;
+       _auctionContractAddress = auctionContractAddress,
+       _domainName = domainName,
+       _domainVersion = domainVersion,
+       _typeName = typeName,
+       _typeSuffixData = typeSuffixData,
+       _trustedForwarderAddress = trustedForwarderAddress;
   
   /// Place a bid on an auction using a meta-transaction
   /// The gas fee will be paid by the relayer
@@ -49,9 +66,14 @@ class AuctionServiceMeta {
           deviceId,
           bidAmountWei.toString(),
         ],
+        domainName: _domainName,
+        domainVersion: _domainVersion,
+        typeName: _typeName,
+        typeSuffixData: _typeSuffixData,
+        trustedForwarderAddress: _trustedForwarderAddress,
       );
     } catch (e) {
-      debugPrint('Error placing bid via meta-transaction: $e');
+      debugPrint('Error placing bid via meta-transaction: ${e.toString()}');
       throw Exception('Failed to place bid: ${e.toString()}');
     }
   }
@@ -79,9 +101,14 @@ class AuctionServiceMeta {
         targetContract: _auctionContractAddress,
         functionSignature: 'finalizeAuction(bytes32)',
         functionParams: [deviceId],
+        domainName: _domainName,
+        domainVersion: _domainVersion,
+        typeName: _typeName,
+        typeSuffixData: _typeSuffixData,
+        trustedForwarderAddress: _trustedForwarderAddress,
       );
     } catch (e) {
-      debugPrint('Error finalizing auction via meta-transaction: $e');
+      debugPrint('Error finalizing auction via meta-transaction: ${e.toString()}');
       throw Exception('Failed to finalize auction: ${e.toString()}');
     }
   }
@@ -118,9 +145,14 @@ class AuctionServiceMeta {
           reservePriceWei.toString(),
           duration.toString(),
         ],
+        domainName: _domainName,
+        domainVersion: _domainVersion,
+        typeName: _typeName,
+        typeSuffixData: _typeSuffixData,
+        trustedForwarderAddress: _trustedForwarderAddress,
       );
     } catch (e) {
-      debugPrint('Error creating auction via meta-transaction: $e');
+      debugPrint('Error creating auction via meta-transaction: ${e.toString()}');
       throw Exception('Failed to create auction: ${e.toString()}');
     }
   }
@@ -148,9 +180,14 @@ class AuctionServiceMeta {
         targetContract: _auctionContractAddress,
         functionSignature: 'cancelAuction(bytes32)',
         functionParams: [deviceId],
+        domainName: _domainName,
+        domainVersion: _domainVersion,
+        typeName: _typeName,
+        typeSuffixData: _typeSuffixData,
+        trustedForwarderAddress: _trustedForwarderAddress,
       );
     } catch (e) {
-      debugPrint('Error canceling auction via meta-transaction: $e');
+      debugPrint('Error canceling auction via meta-transaction: ${e.toString()}');
       throw Exception('Failed to cancel auction: ${e.toString()}');
     }
   }
