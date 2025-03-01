@@ -1,3 +1,5 @@
+import 'device_control_slot.dart';
+
 class Auction {
   final String deviceId;
   final String owner;
@@ -8,6 +10,7 @@ class Auction {
   final String highestBidder;
   final bool isActive;
   final bool isFinalized;
+  final List<DeviceControlSlot> controlSlots;
 
   Auction({
     required this.deviceId,
@@ -19,7 +22,8 @@ class Auction {
     this.highestBidder = '',
     required this.isActive,
     required this.isFinalized,
-  });
+    List<DeviceControlSlot>? controlSlots,
+  }) : controlSlots = controlSlots ?? [];
 
   // Create from blockchain data
   factory Auction.fromBlockchainData(Map<String, dynamic> data) {
@@ -52,6 +56,7 @@ class Auction {
       highestBidder: data['highestBidder'] as String,
       isActive: data['active'] as bool,
       isFinalized: data['finalized'] as bool,
+      controlSlots: data['controlSlots'] != null ? data['controlSlots'].map((slot) => DeviceControlSlot.fromJson(slot)).toList() : [],
     );
   }
 
@@ -131,6 +136,7 @@ class Auction {
     String? highestBidder,
     bool? isActive,
     bool? isFinalized,
+    List<DeviceControlSlot>? controlSlots,
   }) {
     return Auction(
       deviceId: deviceId ?? this.deviceId,
@@ -142,6 +148,7 @@ class Auction {
       highestBidder: highestBidder ?? this.highestBidder,
       isActive: isActive ?? this.isActive,
       isFinalized: isFinalized ?? this.isFinalized,
+      controlSlots: controlSlots ?? this.controlSlots,
     );
   }
 
@@ -149,6 +156,6 @@ class Auction {
   String toString() {
     return 'Auction{deviceId: $deviceId, owner: $owner, startTime: $startTime, endTime: $endTime, '
            'minimumBid: $minimumBid, highestBid: $highestBid, highestBidder: $highestBidder, '
-           'isActive: $isActive, isFinalized: $isFinalized}';
+           'isActive: $isActive, isFinalized: $isFinalized, controlSlots: $controlSlots}';
   }
 }

@@ -1126,6 +1126,51 @@ class Web3Service extends ChangeNotifier {
     }
   }
   
+  // Cancel an auction (only available to the owner with no bids)
+  Future<OperationResult<bool>> cancelAuction({required String deviceId}) async {
+    _log('Canceling auction for device: $deviceId');
+    
+    try {
+      if (isMockMode) {
+        // Mock implementation
+        if (!_activeAuctions.containsKey(deviceId)) {
+          return OperationResult.failure(message: 'Auction not found for device: $deviceId');
+        }
+        
+        // Check if the caller is the owner
+        final currentAddress = this.currentAddress?.toLowerCase() ?? '';
+        final owner = _activeAuctions[deviceId]!['owner'].toString().toLowerCase();
+        
+        if (currentAddress != owner) {
+          return OperationResult.failure(message: 'Only the owner can cancel an auction');
+        }
+        
+        // Check if there are no bids
+        final highestBid = _activeAuctions[deviceId]!['highestBid'] as BigInt;
+        if (highestBid > BigInt.zero) {
+          return OperationResult.failure(message: 'Cannot cancel an auction with active bids');
+        }
+        
+        // Cancel the auction
+        _activeAuctions[deviceId]!['active'] = false;
+        _activeAuctions[deviceId]!['finalized'] = true;
+        notifyListeners();
+        
+        return OperationResult.success(
+          data: true,
+          message: 'Auction canceled successfully (Mock)',
+        );
+      } else {
+        // In a real implementation, this would call the contract method
+        // For now, we'll just return an error
+        return OperationResult.failure(message: 'Cancel auction not implemented for blockchain');
+      }
+    } catch (e) {
+      _log('Error canceling auction: $e', error: e);
+      return OperationResult.failure(message: 'Failed to cancel auction: ${e.toString()}');
+    }
+  }
+  
   /// Checks the current blockchain network status
   /// Returns a map with network information or error details
   Future<Map<String, dynamic>> checkNetworkStatus() async {
