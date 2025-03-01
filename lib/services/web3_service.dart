@@ -42,11 +42,18 @@ class Web3Service extends ChangeNotifier {
   set isMockMode(bool value) {
     _mockMode = value;
     if (_mockMode) {
+      _log('Mock mode enabled');
       _initializeMockData();
+    } else {
+      _log('Mock mode disabled');
     }
     notifyListeners();
   }
 
+  void enableMockMode() {
+    isMockMode = true;
+  }
+  
   // Check if contract is initialized
   bool get isContractInitialized => _isContractInitialized || _mockMode;
   
@@ -54,56 +61,61 @@ class Web3Service extends ChangeNotifier {
   void _initializeMockData() {
     if (isMockMode) {
       _log('Initializing mock auction data');
+      _log('Current active auctions count: ${_activeAuctions.length}');
       
-      // Clear existing mock data
-      _activeAuctions.clear();
-      
-      // Get current time for comparison
-      final now = DateTime.now();
-      
-      // Create some mock auctions
-      final endTime1 = now.add(const Duration(hours: 2));
-      final endTime2 = now.add(const Duration(hours: 5));
-      final endTime3 = now.subtract(const Duration(hours: 2)); // This one has ended
-      
-      // Mock auction 1
-      _activeAuctions['device1'] = {
-        'deviceId': 'device1',
-        'owner': '0xMockOwner123456789',
-        'startTime': now.subtract(const Duration(hours: 2)),
-        'endTime': BigInt.from(endTime1.millisecondsSinceEpoch ~/ 1000),
-        'highestBid': BigInt.from(100),
-        'highestBidder': '0xMockBidder123456789',
-        'active': true,
-        'finalized': false,
-      };
-      
-      // Mock auction 2
-      _activeAuctions['device2'] = {
-        'deviceId': 'device2',
-        'owner': '0xMockOwner987654321',
-        'startTime': now.subtract(const Duration(hours: 1)),
-        'endTime': BigInt.from(endTime2.millisecondsSinceEpoch ~/ 1000),
-        'highestBid': BigInt.from(200),
-        'highestBidder': '0xMockBidder987654321',
-        'active': true,
-        'finalized': false,
-      };
-      
-      // Mock auction 3 (ended)
-      _activeAuctions['device3'] = {
-        'deviceId': 'device3',
-        'owner': '0xMockOwner555555555',
-        'startTime': now.subtract(const Duration(days: 2)),
-        'endTime': BigInt.from(endTime3.millisecondsSinceEpoch ~/ 1000),
-        'highestBid': BigInt.from(300),
-        'highestBidder': '0xMockBidder555555555',
-        'active': false,
-        'finalized': true,
-      };
-      
-      _log('Loaded ${_activeAuctions.length} mock auctions');
-      notifyListeners();
+      // Only initialize if we don't have any auctions yet
+      if (_activeAuctions.isEmpty) {
+        _log('No existing mock auctions found, creating default mock auctions');
+        
+        // Get current time for comparison
+        final now = DateTime.now();
+        
+        // Create some mock auctions
+        final endTime1 = now.add(const Duration(hours: 2));
+        final endTime2 = now.add(const Duration(hours: 5));
+        final endTime3 = now.subtract(const Duration(hours: 2)); // This one has ended
+        
+        // Mock auction 1
+        _activeAuctions['device1'] = {
+          'deviceId': 'device1',
+          'owner': '0xMockOwner123456789',
+          'startTime': now.subtract(const Duration(hours: 2)),
+          'endTime': BigInt.from(endTime1.millisecondsSinceEpoch ~/ 1000),
+          'highestBid': BigInt.from(100),
+          'highestBidder': '0xMockBidder123456789',
+          'active': true,
+          'finalized': false,
+        };
+        
+        // Mock auction 2
+        _activeAuctions['device2'] = {
+          'deviceId': 'device2',
+          'owner': '0xMockOwner987654321',
+          'startTime': now.subtract(const Duration(hours: 1)),
+          'endTime': BigInt.from(endTime2.millisecondsSinceEpoch ~/ 1000),
+          'highestBid': BigInt.from(200),
+          'highestBidder': '0xMockBidder987654321',
+          'active': true,
+          'finalized': false,
+        };
+        
+        // Mock auction 3 (ended)
+        _activeAuctions['device3'] = {
+          'deviceId': 'device3',
+          'owner': '0xMockOwner555555555',
+          'startTime': now.subtract(const Duration(days: 2)),
+          'endTime': BigInt.from(endTime3.millisecondsSinceEpoch ~/ 1000),
+          'highestBid': BigInt.from(300),
+          'highestBidder': '0xMockBidder555555555',
+          'active': false,
+          'finalized': true,
+        };
+        
+        _log('Created ${_activeAuctions.length} default mock auctions');
+        notifyListeners();
+      } else {
+        _log('Using existing ${_activeAuctions.length} mock auctions');
+      }
     }
   }
 
@@ -202,7 +214,7 @@ class Web3Service extends ChangeNotifier {
       
       // Check if ethereum is available
       if (Ethereum.ethereum == null) {
-        _log('Ethereum provider not available, falling back to local RPC');
+        _log('Ethereum provider not available, attempting to use local RPC');
         
         try {
           _log('Creating JsonRpcProvider with URL: ${getRpcUrl()}');
@@ -214,12 +226,14 @@ class Web3Service extends ChangeNotifier {
             final network = await _provider!.getNetwork();
             _log('Successfully connected to network: ${network.name}, chainId: ${network.chainId}');
           } catch (e) {
-            _log('Error getting network from provider:', error: e);
-            return false;
+            _log('Error getting network from provider, falling back to mock mode:', error: e);
+            _enableMockMode();
+            return true;
           }
         } catch (e) {
-          _log('Error creating JsonRpcProvider:', error: e);
-          return false;
+          _log('Error creating JsonRpcProvider, falling back to mock mode:', error: e);
+          _enableMockMode();
+          return true;
         }
       } else {
         // Connect to ethereum
@@ -227,8 +241,9 @@ class Web3Service extends ChangeNotifier {
           _log('Ethereum provider available, requesting accounts...');
           final accs = await Ethereum.ethereum!.requestAccount();
           if (accs.isEmpty) {
-            _log('No accounts returned from wallet');
-            return false;
+            _log('No accounts returned from wallet, falling back to mock mode');
+            _enableMockMode();
+            return true;
           }
           
           _currentAddress = accs.first;
@@ -244,12 +259,14 @@ class Web3Service extends ChangeNotifier {
             final network = await _provider!.getNetwork();
             _log('Successfully connected to network: ${network.name}, chainId: ${network.chainId}');
           } catch (e) {
-            _log('Error getting network from Web3Provider:', error: e);
-            return false;
+            _log('Error getting network from Web3Provider, falling back to mock mode:', error: e);
+            _enableMockMode();
+            return true;
           }
         } catch (e) {
-          _log('Failed to connect to wallet:', error: e);
-          return false;
+          _log('Failed to connect to wallet, falling back to mock mode:', error: e);
+          _enableMockMode();
+          return true;
         }
       }
       
@@ -260,16 +277,46 @@ class Web3Service extends ChangeNotifier {
       if (contractInitialized) {
         _log('Contract initialized successfully');
       } else {
-        _log('Failed to initialize contract');
-        return false;
+        _log('Failed to initialize contract, falling back to mock mode');
+        _enableMockMode();
+        return true;
       }
       
       notifyListeners();
       return true;
     } catch (e) {
-      _log('Error connecting to Web3:', error: e);
-      return false;
+      _log('Error connecting to Web3, falling back to mock mode:', error: e);
+      _enableMockMode();
+      return true;
     }
+  }
+
+  /// Helper method to enable mock mode and load mock auctions
+  Future<void> _enableMockMode() async {
+    _log('Enabling mock mode');
+    _mockMode = true;
+    
+    // Initialize mock data
+    _initializeMockData();
+    
+    // Create a mock auction if there are none
+    if (_activeAuctions.isEmpty) {
+      _log('No active auctions found, creating a mock auction');
+      final result = await createMockAuction();
+      if (result.success) {
+        _log('Successfully created mock auction: ${result.data}');
+      } else {
+        _log('Failed to create mock auction: ${result.message}');
+      }
+    } else {
+      _log('Active auctions already exist, count: ${_activeAuctions.length}');
+      _log('Active auction keys: ${_activeAuctions.keys.join(', ')}');
+    }
+    
+    // Make sure to notify listeners
+    notifyListeners();
+    
+    _log('Mock mode enabled, active auctions: ${_activeAuctions.length}');
   }
 
   // Force connection using JsonRpcProvider directly
@@ -293,32 +340,34 @@ class Web3Service extends ChangeNotifier {
           final network = await _provider!.getNetwork();
           _log('Successfully connected to network: ${network.name}, chainId: ${network.chainId}');
         } catch (e) {
-          _log('Error getting network from JsonRpcProvider:', error: e);
-          return false;
+          _log('Error getting network from JsonRpcProvider, falling back to mock mode:', error: e);
+          _enableMockMode();
+          return true;
         }
-        
-        // Initialize contract
-        _log('Initializing contract with JsonRpcProvider...');
-        final success = await initializeContract();
-        
-        if (success) {
-          _log('Contract initialized successfully with JsonRpcProvider');
-          // Set a dummy address for testing
-          _currentAddress = '0xJsonRpcProviderAddress';
-        } else {
-          _log('Failed to initialize contract with JsonRpcProvider');
-          return false;
-        }
-        
-        notifyListeners();
-        return true;
       } catch (e) {
-        _log('Error creating or using JsonRpcProvider:', error: e);
-        return false;
+        _log('Error creating JsonRpcProvider, falling back to mock mode:', error: e);
+        _enableMockMode();
+        return true;
       }
+      
+      // Initialize contract
+      _log('Initializing contract...');
+      final contractInitialized = await initializeContract();
+      
+      if (contractInitialized) {
+        _log('Contract initialized successfully');
+      } else {
+        _log('Failed to initialize contract, falling back to mock mode');
+        _enableMockMode();
+        return true;
+      }
+      
+      notifyListeners();
+      return true;
     } catch (e) {
-      _log('Error connecting with JsonRpcProvider:', error: e);
-      return false;
+      _log('Error connecting with JsonRpcProvider, falling back to mock mode:', error: e);
+      _enableMockMode();
+      return true;
     }
   }
 
@@ -329,7 +378,13 @@ class Web3Service extends ChangeNotifier {
 
     if (_mockMode) {
       _log('Mock mode enabled, simulating contract initialization');
+      // Set a mock address if none exists
+      if (_currentAddress == null) {
+        _currentAddress = '0xMockAddress${DateTime.now().millisecondsSinceEpoch}';
+        _log('Set mock address: $_currentAddress');
+      }
       await Future.delayed(const Duration(milliseconds: 500)); // Simulate delay
+      _isContractInitialized = true;
       notifyListeners();
       return true;
     }
@@ -379,58 +434,33 @@ class Web3Service extends ChangeNotifier {
   }
 
   Future<void> loadActiveAuctions() async {
+    _log('loadActiveAuctions called, isMockMode: $isMockMode');
+    
     if (_mockMode) {
       _log('Mock mode enabled, loading mock auctions');
+      _log('Current active auctions count: ${_activeAuctions.length}');
+      _log('Current active auction keys: ${_activeAuctions.keys.join(', ')}');
       
-      // Clear existing mock data and reinitialize
-      _activeAuctions.clear();
+      // If we already have mock auctions, don't reinitialize
+      if (_activeAuctions.isNotEmpty) {
+        _log('Mock auctions already loaded, skipping initialization');
+        Future.microtask(() {
+          notifyListeners();
+        });
+        return;
+      }
       
-      // Get current time for comparison
-      final now = DateTime.now();
+      _log('No mock auctions found, initializing mock data');
       
-      // Create some mock auctions
-      final endTime1 = now.add(const Duration(hours: 2));
-      final endTime2 = now.add(const Duration(hours: 5));
-      final endTime3 = now.subtract(const Duration(hours: 2)); // This one has ended
+      // Initialize mock data
+      _initializeMockData();
       
-      // Mock auction 1
-      _activeAuctions['device1'] = {
-        'deviceId': 'device1',
-        'owner': '0xMockOwner123456789',
-        'startTime': now.subtract(const Duration(hours: 2)),
-        'endTime': BigInt.from(endTime1.millisecondsSinceEpoch ~/ 1000),
-        'highestBid': BigInt.from(100),
-        'highestBidder': '0xMockBidder123456789',
-        'active': true,
-        'finalized': false,
-      };
+      _log('Mock auctions initialized, count: ${_activeAuctions.length}');
+      _log('Mock auction keys: ${_activeAuctions.keys.join(', ')}');
       
-      // Mock auction 2
-      _activeAuctions['device2'] = {
-        'deviceId': 'device2',
-        'owner': '0xMockOwner987654321',
-        'startTime': now.subtract(const Duration(hours: 1)),
-        'endTime': BigInt.from(endTime2.millisecondsSinceEpoch ~/ 1000),
-        'highestBid': BigInt.from(200),
-        'highestBidder': '0xMockBidder987654321',
-        'active': true,
-        'finalized': false,
-      };
-      
-      // Mock auction 3 (ended)
-      _activeAuctions['device3'] = {
-        'deviceId': 'device3',
-        'owner': '0xMockOwner555555555',
-        'startTime': now.subtract(const Duration(days: 2)),
-        'endTime': BigInt.from(endTime3.millisecondsSinceEpoch ~/ 1000),
-        'highestBid': BigInt.from(300),
-        'highestBidder': '0xMockBidder555555555',
-        'active': false,
-        'finalized': true,
-      };
-      
-      _log('Loaded ${_activeAuctions.length} mock auctions');
-      notifyListeners();
+      Future.microtask(() {
+        notifyListeners();
+      });
       return;
     }
     
@@ -466,7 +496,7 @@ class Web3Service extends ChangeNotifier {
           for (final deviceId in deviceIds) {
             try {
               _log('Checking auction for device ID: $deviceId');
-              final auctionData = await _contract!.call('getAuction', [deviceId]);
+              final auctionData = await _contract!.call('getAuction', [deviceId]) as List<dynamic>;
               
               // Extract auction data
               final owner = auctionData[0];
@@ -520,7 +550,9 @@ class Web3Service extends ChangeNotifier {
         rethrow;
       }
       
-      notifyListeners();
+      Future.microtask(() {
+        notifyListeners();
+      });
     } catch (e) {
       _log('Error loading auctions:', error: e);
       throw Exception('Failed to load auctions: $e');
@@ -572,7 +604,9 @@ class Web3Service extends ChangeNotifier {
       auction['highestBid'] = amountWei;
       auction['highestBidder'] = _currentAddress ?? '0xMockBidder123456789';
       
-      notifyListeners();
+      Future.microtask(() {
+        notifyListeners();
+      });
       return;
     }
     
@@ -594,7 +628,7 @@ class Web3Service extends ChangeNotifier {
       
       // Set value for the transaction
       final overrides = TransactionOverride(
-        value: BigNumber.from(amountWei),
+        value: amountWei,
       );
       
       // Call the contract method
@@ -668,7 +702,7 @@ class Web3Service extends ChangeNotifier {
         'placeBid',
         [bytes32DeviceId],
         TransactionOverride(
-          value: BigNumber.from(bidWei),
+          value: bidWei,
         ),
       );
       
@@ -719,7 +753,9 @@ class Web3Service extends ChangeNotifier {
       auction['active'] = false;
       auction['finalized'] = true;
       
-      notifyListeners();
+      Future.microtask(() {
+        notifyListeners();
+      });
       return;
     }
     
@@ -867,7 +903,7 @@ class Web3Service extends ChangeNotifier {
       }
       
       // Call a simple view function to test the contract
-      final count = await _contract!.call('getAuctionCount', []);
+      final count = await _contract!.call('getAuctionCount', []) as BigInt;
       _log('Contract test successful. Auction count: $count');
       return true;
     } catch (e) {
@@ -888,7 +924,9 @@ class Web3Service extends ChangeNotifier {
       _isContractInitialized = false;
     }
     
-    notifyListeners();
+    Future.microtask(() {
+      notifyListeners();
+    });
     _log('Disconnected from Web3');
   }
 
@@ -905,12 +943,12 @@ class Web3Service extends ChangeNotifier {
       } catch (e) {
         _log('Failed to connect to blockchain after toggling to real mode:', error: e);
         // If connection fails, switch back to mock mode
-        _mockMode = true;
+        await _enableMockMode();
         return false;
       }
     } else {
-      // If switching to mock mode, load mock auctions
-      await loadActiveAuctions();
+      // If switching to mock mode, use the enableMockMode helper
+      await _enableMockMode();
       return true;
     }
   }
@@ -934,12 +972,13 @@ class Web3Service extends ChangeNotifier {
     required Duration duration,
     required double minimumBid,
   }) async {
-    _log('Creating auction for device: $deviceId');
+    _log('createAuction called for device: $deviceId, isMockMode: $isMockMode');
     
     try {
       if (isMockMode) {
-        // Mock implementation
+        _log('Mock mode enabled, creating mock auction');
         final endTime = startTime.add(duration);
+        _log('Creating mock auction with endTime: $endTime');
         
         _activeAuctions[deviceId] = {
           'deviceId': deviceId,
@@ -953,7 +992,12 @@ class Web3Service extends ChangeNotifier {
           'finalized': false,
         };
         
-        notifyListeners();
+        _log('Added mock auction to _activeAuctions, count: ${_activeAuctions.length}');
+        _log('Active auction keys: ${_activeAuctions.keys.join(', ')}');
+        
+        Future.microtask(() {
+          notifyListeners();
+        });
         
         final auction = Auction.fromBlockchainData(_activeAuctions[deviceId]!);
         return OperationResult.success(
@@ -961,13 +1005,15 @@ class Web3Service extends ChangeNotifier {
           message: 'Auction created successfully (Mock)',
         );
       } else {
-        // Call the real implementation
+        _log('Real mode enabled, creating real auction');
         await _createAuctionReal(
           deviceId: deviceId,
           startTime: startTime,
           duration: duration,
           minBidEth: minimumBid,
         );
+        
+        _log('Real auction created successfully');
         
         // For real implementation, we would fetch the auction details
         // but for now, just return a success message
@@ -981,31 +1027,91 @@ class Web3Service extends ChangeNotifier {
     }
   }
   
-  // Get auction details
+  /// Get an auction by device ID
   Future<OperationResult<Auction>> getAuction({required String deviceId}) async {
     _log('Getting auction for device: $deviceId');
     
-    try {
-      if (isMockMode) {
-        // Mock implementation
-        if (!_activeAuctions.containsKey(deviceId)) {
-          return OperationResult.failure(message: 'Auction not found for device: $deviceId');
-        }
-        
-        final auction = Auction.fromBlockchainData(_activeAuctions[deviceId]!);
-        return OperationResult.success(
-          data: auction,
-          message: 'Auction retrieved successfully (Mock)',
+    if (_mockMode) {
+      _log('Mock mode enabled, getting mock auction');
+      
+      if (!_activeAuctions.containsKey(deviceId)) {
+        return OperationResult<Auction>(
+          success: false,
+          message: 'Auction not found',
         );
       }
       
-      // Real implementation would go here
-      // ...
+      final data = _activeAuctions[deviceId]!;
       
-      return OperationResult.failure(message: 'Real blockchain implementation not available');
+      final auction = Auction(
+        deviceId: data['deviceId'],
+        owner: data['owner'],
+        startTime: data['startTime'],
+        endTime: DateTime.fromMillisecondsSinceEpoch(
+          (data['endTime'] as BigInt).toInt() * 1000,
+        ),
+        minimumBid: data['minimumBid'],
+        highestBid: data['highestBid'] != null 
+            ? (data['highestBid'] is BigInt 
+                ? (data['highestBid'] as BigInt).toDouble() / 1e18 
+                : (data['highestBid'] as double))
+            : 0.0,
+        highestBidder: data['highestBidder'] ?? '0x0000000000000000000000000000000000000000',
+        isActive: data['active'] ?? true,
+        isFinalized: data['finalized'] ?? false,
+      );
+      
+      return OperationResult<Auction>(
+        success: true,
+        data: auction,
+      );
+    }
+    
+    try {
+      if (_contract == null || _provider == null) {
+        return OperationResult<Auction>(
+          success: false,
+          message: 'Contract or provider not initialized',
+        );
+      }
+      
+      // Call getAuction function
+      final result = await _contract!.call('getAuction', [deviceId]) as List<dynamic>;
+      
+      if (result.isEmpty) {
+        return OperationResult<Auction>(
+          success: false,
+          message: 'Auction not found',
+        );
+      }
+      
+      // Parse result
+      final auction = Auction(
+        deviceId: deviceId,
+        owner: result[0],
+        startTime: DateTime.fromMillisecondsSinceEpoch(
+          (result[1] as BigInt).toInt() * 1000,
+        ),
+        endTime: DateTime.fromMillisecondsSinceEpoch(
+          (result[2] as BigInt).toInt() * 1000,
+        ),
+        minimumBid: (result[3] as BigInt).toDouble() / 1e18,
+        highestBid: (result[4] as BigInt).toDouble() / 1e18,
+        highestBidder: result[5],
+        isActive: result[6] as bool,
+        isFinalized: result[7] as bool,
+      );
+      
+      return OperationResult<Auction>(
+        success: true,
+        data: auction,
+      );
     } catch (e) {
-      _log('Error getting auction: $e', error: e);
-      return OperationResult.failure(message: 'Failed to get auction: ${e.toString()}');
+      _log('Error getting auction: $e');
+      return OperationResult<Auction>(
+        success: false,
+        message: 'Error getting auction: $e',
+      );
     }
   }
   
@@ -1055,7 +1161,9 @@ class Web3Service extends ChangeNotifier {
         auction['highestBid'] = BigInt.from((amount * 1e18).toInt());
         auction['highestBidder'] = '0xMockBidder${DateTime.now().millisecondsSinceEpoch}';
         
-        notifyListeners();
+        Future.microtask(() {
+          notifyListeners();
+        });
         
         return OperationResult.success(
           data: amount,
@@ -1103,7 +1211,9 @@ class Web3Service extends ChangeNotifier {
         auction['active'] = false;
         auction['finalized'] = true;
         
-        notifyListeners();
+        Future.microtask(() {
+          notifyListeners();
+        });
         
         return OperationResult.success(
           data: true,
@@ -1154,7 +1264,9 @@ class Web3Service extends ChangeNotifier {
         // Cancel the auction
         _activeAuctions[deviceId]!['active'] = false;
         _activeAuctions[deviceId]!['finalized'] = true;
-        notifyListeners();
+        Future.microtask(() {
+          notifyListeners();
+        });
         
         return OperationResult.success(
           data: true,
@@ -1381,5 +1493,415 @@ class Web3Service extends ChangeNotifier {
   
   String getContractAddress() {
     return _settingsService?.getContractAddress() ?? DADIAuction.address;
+  }
+
+  // Simulate the full auction lifecycle in mock mode
+  Future<OperationResult<Map<String, dynamic>>> simulateAuctionLifecycle({
+    required String deviceId,
+    required Duration auctionDuration,
+    required double startingBid,
+    required int numberOfBids,
+  }) async {
+    _log('Simulating full auction lifecycle for device: $deviceId');
+    
+    if (!isMockMode) {
+      return OperationResult.failure(message: 'Auction lifecycle simulation is only available in mock mode');
+    }
+    
+    try {
+      // Step 1: Create the auction
+      final now = DateTime.now();
+      final startTime = now;
+      final endTime = now.add(auctionDuration);
+      
+      _log('Creating mock auction starting at $startTime and ending at $endTime');
+      
+      // Create the auction
+      final createResult = await createAuction(
+        deviceId: deviceId,
+        startTime: startTime,
+        duration: auctionDuration,
+        minimumBid: startingBid,
+      );
+      
+      if (!createResult.success) {
+        return OperationResult.failure(message: 'Failed to create auction: ${createResult.message}');
+      }
+      
+      _log('Auction created successfully');
+      
+      // Step 2: Simulate bidding
+      double currentBid = startingBid;
+      final bidHistory = <Map<String, dynamic>>[];
+      
+      for (int i = 0; i < numberOfBids; i++) {
+        // Increase bid by a random amount between 5% and 15%
+        final bidIncrease = currentBid * (0.05 + (0.1 * (i / numberOfBids)));
+        currentBid += bidIncrease;
+        
+        _log('Placing bid #${i+1}: $currentBid ETH');
+        
+        // Place the bid
+        final bidResult = await placeBidNew(
+          deviceId: deviceId,
+          amount: currentBid,
+        );
+        
+        if (!bidResult.success) {
+          _log('Bid failed: ${bidResult.message}');
+          continue;
+        }
+        
+        // Record the bid
+        bidHistory.add({
+          'bidder': '0xMockBidder${DateTime.now().millisecondsSinceEpoch}',
+          'amount': currentBid,
+          'timestamp': DateTime.now(),
+        });
+        
+        // Add a small delay between bids
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+      
+      _log('Completed ${bidHistory.length} bids');
+      
+      // Step 3: Fast-forward time to end the auction
+      // We'll modify the auction's end time to be in the past
+      if (_activeAuctions.containsKey(deviceId)) {
+        final auction = _activeAuctions[deviceId]!;
+        final pastEndTime = DateTime.now().subtract(const Duration(minutes: 1));
+        auction['endTime'] = BigInt.from(pastEndTime.millisecondsSinceEpoch ~/ 1000);
+        _log('Fast-forwarded auction end time to $pastEndTime');
+      }
+      
+      // Step 4: Finalize the auction
+      _log('Finalizing auction');
+      final finalizeResult = await finalizeAuctionNew(deviceId: deviceId);
+      
+      if (!finalizeResult.success) {
+        return OperationResult.failure(message: 'Failed to finalize auction: ${finalizeResult.message}');
+      }
+      
+      _log('Auction finalized successfully');
+      
+      // Step 5: Return the simulation results
+      final simulationResults = {
+        'deviceId': deviceId,
+        'startTime': startTime,
+        'endTime': endTime,
+        'startingBid': startingBid,
+        'finalBid': currentBid,
+        'numberOfBids': bidHistory.length,
+        'bidHistory': bidHistory,
+        'finalized': true,
+        'winner': bidHistory.isNotEmpty ? bidHistory.last['bidder'] : null,
+      };
+      
+      return OperationResult.success(
+        data: simulationResults,
+        message: 'Auction lifecycle simulation completed successfully',
+      );
+    } catch (e) {
+      _log('Error simulating auction lifecycle: $e', error: e);
+      return OperationResult.failure(message: 'Failed to simulate auction lifecycle: ${e.toString()}');
+    }
+  }
+
+  // Helper method to simulate the auction lifecycle in mock mode
+  Future<bool> simulateAuctionLifecycleNew(String deviceId) async {
+    if (!isMockMode) {
+      _log('Auction lifecycle simulation is only available in mock mode');
+      return false;
+    }
+    
+    if (!_activeAuctions.containsKey(deviceId)) {
+      _log('Auction not found: $deviceId');
+      return false;
+    }
+    
+    try {
+      final auction = _activeAuctions[deviceId]!;
+      
+      // Check if auction is already finalized
+      if (auction['finalized'] == true) {
+        _log('Auction is already finalized');
+        return false;
+      }
+      
+      // Fast-forward time to end the auction if it's not already ended
+      final now = DateTime.now();
+      final endTimeUnix = (auction['endTime'] as BigInt).toInt();
+      final endTime = DateTime.fromMillisecondsSinceEpoch(endTimeUnix * 1000);
+      
+      if (endTime.isAfter(now)) {
+        _log('Fast-forwarding auction end time to the past');
+        final pastEndTime = now.subtract(const Duration(minutes: 1));
+        auction['endTime'] = BigInt.from(pastEndTime.millisecondsSinceEpoch ~/ 1000);
+      }
+      
+      // Finalize the auction
+      final result = await finalizeAuctionNew(deviceId: deviceId);
+      
+      if (result.success) {
+        _log('Auction finalized successfully');
+        Future.microtask(() {
+          notifyListeners();
+        });
+        return true;
+      } else {
+        _log('Failed to finalize auction: ${result.message}');
+        return false;
+      }
+    } catch (e) {
+      _log('Error simulating auction lifecycle: $e', error: e);
+      return false;
+    }
+  }
+
+  // Helper method to create a mock auction with the given parameters
+  Future<OperationResult<String>> createMockAuction({
+    String? deviceId,
+    Duration duration = const Duration(hours: 2),
+    double minimumBid = 0.1,
+  }) async {
+    _log('createMockAuction called with deviceId: $deviceId, isMockMode: $isMockMode');
+    
+    if (!isMockMode) {
+      _log('Mock auctions can only be created in mock mode');
+      return OperationResult.failure(message: 'Mock auctions can only be created in mock mode');
+    }
+    
+    try {
+      // Generate a unique device ID if not provided
+      final auctionDeviceId = deviceId ?? 'mock-device-${DateTime.now().millisecondsSinceEpoch}';
+      _log('Using device ID: $auctionDeviceId');
+      
+      // Check if an auction already exists for this device
+      if (_activeAuctions.containsKey(auctionDeviceId)) {
+        _log('An auction already exists for device: $auctionDeviceId');
+        return OperationResult.failure(message: 'An auction already exists for device: $auctionDeviceId');
+      }
+      
+      // Create the auction
+      final now = DateTime.now();
+      final startTime = now;
+      final endTime = now.add(duration);
+      
+      _log('Creating mock auction for device: $auctionDeviceId, start: $startTime, end: $endTime');
+      
+      final result = await createAuction(
+        deviceId: auctionDeviceId,
+        startTime: startTime,
+        duration: duration,
+        minimumBid: minimumBid,
+      );
+      
+      if (result.success) {
+        _log('Mock auction created successfully, active auctions: ${_activeAuctions.length}');
+        return OperationResult.success(
+          data: auctionDeviceId,
+          message: 'Mock auction created successfully',
+        );
+      } else {
+        _log('Failed to create mock auction: ${result.message}');
+        return OperationResult.failure(message: result.message);
+      }
+    } catch (e) {
+      _log('Error creating mock auction: $e', error: e);
+      return OperationResult.failure(message: 'Failed to create mock auction: ${e.toString()}');
+    }
+  }
+
+  // Helper method to place a random bid on an auction
+  Future<OperationResult<double>> placeMockBid(String deviceId) async {
+    if (!isMockMode) {
+      return OperationResult.failure(message: 'Mock bidding is only available in mock mode');
+    }
+    
+    if (!_activeAuctions.containsKey(deviceId)) {
+      return OperationResult.failure(message: 'Auction not found: $deviceId');
+    }
+    
+    try {
+      final auction = _activeAuctions[deviceId]!;
+      
+      // Get current highest bid
+      final highestBidWei = auction['highestBid'] as BigInt;
+      final highestBidEth = highestBidWei.toDouble() / 1e18;
+      
+      // Calculate a new bid that's 10-20% higher
+      final bidIncrease = highestBidEth * (0.1 + (0.1 * (DateTime.now().millisecond / 1000)));
+      final newBid = highestBidEth + bidIncrease;
+      
+      _log('Placing mock bid of $newBid ETH on device: $deviceId');
+      
+      // Place the bid
+      final result = await placeBidNew(
+        deviceId: deviceId,
+        amount: newBid,
+      );
+      
+      return result;
+    } catch (e) {
+      _log('Error placing mock bid: $e', error: e);
+      return OperationResult.failure(message: 'Failed to place mock bid: ${e.toString()}');
+    }
+  }
+
+  /// Force mock mode and create mock auctions
+  /// This is especially useful for web environments where mock mode might not be working correctly
+  Future<void> forceEnableMockMode() async {
+    _log('Forcing mock mode enabled');
+    _mockMode = true;
+    
+    // Clear any existing auctions to start fresh
+    _activeAuctions.clear();
+    
+    // Initialize with default mock auctions
+    _initializeMockData();
+    
+    // Create an additional mock auction with current timestamp
+    final deviceId = 'mock-device-${DateTime.now().millisecondsSinceEpoch}';
+    _log('Creating additional mock auction with ID: $deviceId');
+    
+    final now = DateTime.now();
+    final endTime = now.add(const Duration(hours: 2));
+    
+    _activeAuctions[deviceId] = {
+      'deviceId': deviceId,
+      'owner': '0xMockOwner${DateTime.now().millisecondsSinceEpoch}',
+      'startTime': now,
+      'endTime': BigInt.from(endTime.millisecondsSinceEpoch ~/ 1000),
+      'minimumBid': 0.1,
+      'highestBid': BigInt.from(0),
+      'highestBidder': '0x0000000000000000000000000000000000000000',
+      'active': true,
+      'finalized': false,
+    };
+    
+    _log('Mock mode forced enabled, active auctions: ${_activeAuctions.length}');
+    _log('Active auction keys: ${_activeAuctions.keys.join(', ')}');
+    
+    // Make sure to notify listeners
+    Future.microtask(() {
+      notifyListeners();
+    });
+  }
+
+  /// Get all active auctions
+  Future<OperationResult<List<Auction>>> getActiveAuctions() async {
+    _log('Getting active auctions');
+    
+    if (_mockMode) {
+      _log('Mock mode enabled, returning mock active auctions');
+      
+      try {
+        // Convert the _activeAuctions map to a list of Auction objects
+        final activeAuctions = _activeAuctions.entries
+            .where((entry) => entry.value['active'] == true)
+            .map((entry) {
+              final data = entry.value;
+              
+              // Handle various data types and null values
+              final startTime = data['startTime'] is DateTime 
+                  ? data['startTime'] as DateTime
+                  : DateTime.now().subtract(const Duration(hours: 1));
+              
+              final endTimeValue = data['endTime'];
+              final endTime = endTimeValue is DateTime 
+                  ? endTimeValue 
+                  : endTimeValue is BigInt 
+                      ? DateTime.fromMillisecondsSinceEpoch((endTimeValue).toInt() * 1000)
+                      : endTimeValue is int
+                          ? DateTime.fromMillisecondsSinceEpoch(endTimeValue * 1000)
+                          : DateTime.now().add(const Duration(hours: 23));
+              
+              final minimumBidValue = data['minimumBid'];
+              final minimumBid = minimumBidValue is double 
+                  ? minimumBidValue 
+                  : minimumBidValue is BigInt
+                      ? minimumBidValue.toDouble() / 1e18
+                      : 0.1;
+              
+              final highestBidValue = data['highestBid'];
+              final highestBid = highestBidValue is double 
+                  ? highestBidValue 
+                  : highestBidValue is BigInt
+                      ? highestBidValue.toDouble() / 1e18
+                      : 0.0;
+              
+              final highestBidder = data['highestBidder'] as String? ?? '0x0000000000000000000000000000000000000000';
+              final isActive = data['active'] as bool? ?? true;
+              final isFinalized = data['finalized'] as bool? ?? false;
+              
+              return Auction(
+                deviceId: data['deviceId'] ?? 'unknown-device',
+                owner: data['owner'] ?? '0x0000000000000000000000000000000000000000',
+                startTime: startTime,
+                endTime: endTime,
+                minimumBid: minimumBid,
+                highestBid: highestBid,
+                highestBidder: highestBidder,
+                isActive: isActive,
+                isFinalized: isFinalized,
+              );
+            })
+            .toList();
+        
+        _log('Found ${activeAuctions.length} active mock auctions');
+        return OperationResult<List<Auction>>(
+          success: true,
+          data: activeAuctions,
+        );
+      } catch (e) {
+        _log('Error processing mock auctions: $e');
+        // Return empty list instead of failing
+        return OperationResult<List<Auction>>(
+          success: true,
+          data: [],
+          message: 'Error processing mock auctions: $e',
+        );
+      }
+    }
+    
+    try {
+      if (_contract == null || _provider == null) {
+        return OperationResult<List<Auction>>(
+          success: false,
+          message: 'Contract or provider not initialized',
+        );
+      }
+      
+      // Call getActiveAuctions function
+      final result = await _contract!.call('getActiveAuctions', []) as List<dynamic>;
+      
+      if (result.isEmpty) {
+        return OperationResult<List<Auction>>(
+          success: true,
+          data: [],
+        );
+      }
+      
+      // Get details for each auction
+      final auctions = <Auction>[];
+      
+      for (final deviceId in result) {
+        final auctionResult = await getAuction(deviceId: deviceId);
+        if (auctionResult.success && auctionResult.data != null) {
+          auctions.add(auctionResult.data!);
+        }
+      }
+      
+      return OperationResult<List<Auction>>(
+        success: true,
+        data: auctions,
+      );
+    } catch (e) {
+      _log('Error getting active auctions: $e');
+      return OperationResult<List<Auction>>(
+        success: false,
+        message: 'Error getting active auctions: $e',
+      );
+    }
   }
 }

@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class MockWeb3Service with ChangeNotifier implements Web3ServiceInterface {
   bool _isConnected = false;
   final Map<String, Auction> _auctions = {};
+  bool _mockMode = false;
   
   MockWeb3Service() {
     _initializeMockData();
@@ -49,7 +50,7 @@ class MockWeb3Service with ChangeNotifier implements Web3ServiceInterface {
   bool get isConnected => _isConnected;
   
   @override
-  bool get isMockMode => true;
+  bool get isMockMode => _mockMode;
   
   @override
   Future<bool> connectWithJsonRpc() async {
@@ -176,6 +177,13 @@ class MockWeb3Service with ChangeNotifier implements Web3ServiceInterface {
       success: true,
       data: true,
     );
+  }
+  
+  @override
+  Future<void> forceEnableMockMode() async {
+    // Mock implementation
+    _mockMode = true;
+    notifyListeners();
   }
 }
 

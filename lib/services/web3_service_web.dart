@@ -445,4 +445,42 @@ class Web3ServiceWeb extends Web3ServiceInterface {
       );
     }
   }
+  
+  /// Force mock mode and create mock auctions
+  /// This is especially useful for web environments where mock mode might not be working correctly
+  Future<void> forceEnableMockMode() async {
+    _log('Forcing mock mode enabled in Web3ServiceWeb');
+    
+    // Set mock mode in settings
+    await _settingsService.setUseMockBlockchain(true);
+    
+    // Clear any existing auctions to start fresh
+    _auctions.clear();
+    
+    // Initialize with default mock auctions
+    _initializeMockData();
+    
+    // Create an additional mock auction with current timestamp
+    final now = DateTime.now();
+    final deviceId = 'mock-device-${now.millisecondsSinceEpoch}';
+    _log('Creating additional mock auction with ID: $deviceId');
+    
+    _auctions[deviceId] = Auction(
+      deviceId: deviceId,
+      owner: '0xMockOwner${now.millisecondsSinceEpoch}',
+      startTime: now,
+      endTime: now.add(const Duration(hours: 2)),
+      minimumBid: 0.1,
+      highestBid: 0.0,
+      highestBidder: '0x0000000000000000000000000000000000000000',
+      isActive: true,
+      isFinalized: false,
+    );
+    
+    _log('Mock mode forced enabled, active auctions: ${_auctions.length}');
+    _log('Active auction keys: ${_auctions.keys.join(', ')}');
+    
+    // Make sure to notify listeners
+    notifyListeners();
+  }
 }

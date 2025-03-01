@@ -57,8 +57,6 @@ void main() {
       
       service = TransactionWebSocketService(
         webSocketUrl: 'wss://test.example.com/ws',
-        reconnectIntervalMs: 100,
-        maxReconnectAttempts: 3,
         webSocketChannelFactory: (uri) => mockChannel,
       );
     });

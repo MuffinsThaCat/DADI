@@ -30,4 +30,7 @@ abstract class Web3ServiceInterface extends ChangeNotifier {
   
   /// Finalize an auction
   Future<OperationResult<bool>> finalizeAuction({required String deviceId});
+  
+  /// Force mock mode and create mock auctions
+  Future<void> forceEnableMockMode();
 }

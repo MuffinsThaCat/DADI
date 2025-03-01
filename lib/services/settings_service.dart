@@ -14,8 +14,8 @@ class SettingsService extends ChangeNotifier {
   static const String _contractAddressKey = 'contractAddress';
   
   // Default values
-  static const String _defaultRpcUrl = 'http://localhost:8545';
-  static const String _defaultContractAddress = '0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9';
+  static const String _defaultRpcUrl = 'http://localhost:8087';
+  static const String _defaultContractAddress = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
   
   // Cache for settings
   bool? _useMockBlockchain;

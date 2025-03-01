@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:developer' as developer;
 import '../contracts/meta_transaction_relayer.dart';
 import 'wallet_service_interface.dart';
 import 'wallet_service_web.dart';
@@ -7,19 +8,20 @@ import 'meta_transaction_service.dart';
 import 'auction_service_meta.dart';
 import 'transaction_websocket_service.dart';
 import 'transaction_websocket_service_factory.dart';
+import 'web3_service.dart';
 
 /// Factory for creating service instances
 /// This centralizes service creation and configuration
 class ServiceFactory {
   /// Default relayer URL
-  static const String DEFAULT_RELAYER_URL = 'https://relayer.dadi.network';
+  static const String defaultRelayerUrl = 'https://relayer.dadi.network';
   
   /// Default WebSocket URL
-  static const String DEFAULT_WEBSOCKET_URL = 'wss://relayer.dadi.network/ws';
+  static const String defaultWebSocketUrl = 'wss://relayer.dadi.network/ws';
   
   /// Create a wallet service based on platform
   static WalletServiceInterface createWalletService({String? rpcUrl}) {
-    final defaultRpcUrl = 'https://api.avax.network/ext/bc/C/rpc';
+    const defaultRpcUrl = 'https://api.avax.network/ext/bc/C/rpc';
     if (kIsWeb) {
       return WalletServiceWeb(
         rpcUrl: rpcUrl ?? defaultRpcUrl,
@@ -36,14 +38,14 @@ class ServiceFactory {
     required String relayerUrl,
     required WalletServiceInterface walletService,
     String? webSocketUrl,
+    bool useMockWebSocket = kDebugMode, // Use mock mode in debug builds by default
   }) {
     // Create WebSocket service if URL is provided
     TransactionWebSocketService? webSocketService;
     if (webSocketUrl != null) {
       webSocketService = TransactionWebSocketServiceFactory.create(
         webSocketUrl: webSocketUrl,
-        reconnectIntervalMs: 5000,
-        maxReconnectAttempts: 10,
+        useMockMode: useMockWebSocket,
       );
     }
     
@@ -88,6 +90,23 @@ class ServiceFactory {
     );
   }
   
+  /// Create a Web3Service instance
+  static Web3Service createWeb3Service({
+    String? rpcUrl,
+    String? auctionContractAddress,
+  }) {
+    developer.log('ServiceFactory: Creating Web3Service');
+    final web3Service = Web3Service();
+    
+    // Force mock mode for web platform
+    if (kIsWeb) {
+      developer.log('ServiceFactory: Web platform detected, will use mock mode for Web3Service');
+      web3Service.isMockMode = true;
+    }
+    
+    return web3Service;
+  }
+  
   /// Create all services for the application
   static Map<String, dynamic> createAllServices({
     required String relayerUrl,
@@ -100,6 +119,7 @@ class ServiceFactory {
     required String typeSuffixData,
     required String trustedForwarderAddress,
     String? rpcUrl,
+    bool useMockWebSocket = kDebugMode,
   }) {
     final walletService = createWalletService(rpcUrl: rpcUrl);
     
@@ -107,6 +127,7 @@ class ServiceFactory {
       relayerUrl: relayerUrl,
       walletService: walletService,
       webSocketUrl: webSocketUrl,
+      useMockWebSocket: useMockWebSocket,
     );
     
     final relayer = createMetaTransactionRelayer(
@@ -125,11 +146,18 @@ class ServiceFactory {
       trustedForwarderAddress: trustedForwarderAddress,
     );
     
+    // Create Web3Service
+    final web3Service = createWeb3Service(
+      rpcUrl: rpcUrl,
+      auctionContractAddress: auctionContractAddress,
+    );
+    
     return {
       'walletService': walletService,
       'metaTransactionService': metaTransactionService,
       'relayer': relayer,
       'auctionService': auctionService,
+      'web3Service': web3Service,
     };
   }
 }

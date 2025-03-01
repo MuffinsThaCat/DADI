@@ -34,12 +34,13 @@ class Web3ServiceMobile extends Web3ServiceInterface {
   
   final Map<String, Auction> _auctions = {};
   bool _isConnected = false;
+  bool _mockMode = false;
   
   @override
   bool get isConnected => _isConnected;
   
   @override
-  bool get isMockMode => _settingsService.getUseMockBlockchain();
+  bool get isMockMode => _mockMode;
   
   void _log(String message) {
     developer.log('Web3ServiceMobile: $message');
@@ -470,6 +471,43 @@ class Web3ServiceMobile extends Web3ServiceInterface {
         message: 'Error finalizing auction: $e',
       );
     }
+  }
+  
+  @override
+  Future<void> forceEnableMockMode() async {
+    _log('Forcing mock mode enabled in Web3ServiceMobile');
+    
+    // Set mock mode
+    _mockMode = true;
+    
+    // Clear any existing auctions to start fresh
+    _auctions.clear();
+    
+    // Initialize with default mock auctions
+    _initializeMockData();
+    
+    // Create an additional mock auction with current timestamp
+    final now = DateTime.now();
+    final deviceId = 'mock-device-${now.millisecondsSinceEpoch}';
+    _log('Creating additional mock auction with ID: $deviceId');
+    
+    _auctions[deviceId] = Auction(
+      deviceId: deviceId,
+      owner: '0xMockOwner${now.millisecondsSinceEpoch}',
+      startTime: now,
+      endTime: now.add(const Duration(hours: 2)),
+      minimumBid: 0.1,
+      highestBid: 0.0,
+      highestBidder: '0x0000000000000000000000000000000000000000',
+      isActive: true,
+      isFinalized: false,
+    );
+    
+    _log('Mock mode forced enabled, active auctions: ${_auctions.length}');
+    _log('Active auction keys: ${_auctions.keys.join(', ')}');
+    
+    // Make sure to notify listeners
+    notifyListeners();
   }
   
   // Helper method to get credentials (would be replaced with actual wallet implementation)

@@ -35,14 +35,21 @@ class WalletServiceWeb extends WalletServiceInterface {
   
   // Initialize SharedPreferences
   Future<void> _initPrefs() async {
-    _prefs = await SharedPreferences.getInstance();
-    _prefsInitialized = true;
-    
-    // Check if wallet exists
-    final address = _prefs.getString(_walletAddressKey);
-    if (address != null) {
-      _currentAddress = address;
-      notifyListeners();
+    try {
+      _prefs = await SharedPreferences.getInstance();
+      _prefsInitialized = true;
+      
+      // Check if wallet exists
+      final address = _prefs.getString(_walletAddressKey);
+      if (address != null) {
+        _currentAddress = address;
+        notifyListeners();
+      }
+    } catch (e, stackTrace) {
+      debugPrint('Error initializing SharedPreferences: $e');
+      debugPrint('Stack trace: $stackTrace');
+      _prefsInitialized = false;
+      throw Exception('Failed to initialize wallet storage: $e');
     }
   }
   
@@ -174,15 +181,22 @@ class WalletServiceWeb extends WalletServiceInterface {
   
   @override
   Future<bool> walletExists() async {
-    await _ensurePrefsInitialized();
-    
-    final address = _prefs.getString(_walletAddressKey);
-    if (address != null) {
-      _currentAddress = address;
-      notifyListeners();
-      return true;
+    try {
+      await _ensurePrefsInitialized();
+      
+      final address = _prefs.getString(_walletAddressKey);
+      if (address != null) {
+        _currentAddress = address;
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } catch (e, stackTrace) {
+      debugPrint('Error in walletExists: $e');
+      debugPrint('Stack trace: $stackTrace');
+      // Rethrow with more context
+      throw Exception('Failed to check wallet existence: $e');
     }
-    return false;
   }
   
   @override

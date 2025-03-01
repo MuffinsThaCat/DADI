@@ -33,14 +33,10 @@ class WalletServiceFactory {
   /// Create a transaction websocket service
   static TransactionWebSocketService createTransactionWebSocketService({
     String webSocketUrl = 'wss://relayer.dadi.network/ws',
-    int reconnectIntervalMs = 5000,
-    int maxReconnectAttempts = 10,
     WebSocketChannelFactory? webSocketChannelFactory,
   }) {
     return platform.createTransactionWebSocketService(
       webSocketUrl: webSocketUrl,
-      reconnectIntervalMs: reconnectIntervalMs,
-      maxReconnectAttempts: maxReconnectAttempts,
       webSocketChannelFactory: webSocketChannelFactory,
     );
   }

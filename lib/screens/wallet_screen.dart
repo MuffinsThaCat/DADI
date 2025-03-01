@@ -49,23 +49,42 @@ class _WalletScreenState extends State<WalletScreen> with SingleTickerProviderSt
         _walletExists = exists;
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
       if (!mounted) return;
+      
+      debugPrint('Error checking wallet status: $e');
+      debugPrint('Stack trace: $stackTrace');
       
       setState(() {
         _isLoading = false;
+        // Default to false when there's an error
+        _walletExists = false;
       });
       
       // Use a post-frame callback to show the SnackBar after the current frame
       if (mounted) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           try {
+            final errorMessage = e.toString();
+            final displayMessage = errorMessage.length > 100 
+                ? '${errorMessage.substring(0, 100)}...' 
+                : errorMessage;
+                
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error checking wallet status: ${e.toString()}')),
+              SnackBar(
+                content: Text('Error checking wallet status: $displayMessage'),
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  onPressed: () {
+                    _checkWalletStatus();
+                  },
+                ),
+              ),
             );
           } catch (snackBarError) {
             // Ignore ScaffoldMessenger errors in tests
-            print('Could not show SnackBar: $snackBarError');
+            debugPrint('Could not show SnackBar: $snackBarError');
           }
         });
       }

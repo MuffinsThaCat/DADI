@@ -10,12 +10,11 @@ import 'transaction_websocket_service_web.dart' if (dart.library.io) 'transactio
 /// Factory function type for creating WebSocket channels
 typedef WebSocketChannelFactory = WebSocketChannel Function(Uri);
 
-/// Creates the appropriate platform-specific implementation of TransactionWebSocketService
+/// Creates a platform-specific implementation of [TransactionWebSocketService]
 TransactionWebSocketService createTransactionWebSocketService({
   required String webSocketUrl,
-  int reconnectIntervalMs = 5000,
-  int maxReconnectAttempts = 10,
-  WebSocketChannelFactory? webSocketChannelFactory,
+  WebSocketChannel Function(Uri)? webSocketChannelFactory,
+  bool useMockMode = false,
 }) {
   // Default WebSocketChannelFactory if not provided
   final effectiveWebSocketChannelFactory = 
@@ -24,8 +23,7 @@ TransactionWebSocketService createTransactionWebSocketService({
   // Use the platform-specific implementation
   return createWebSocketService(
     webSocketUrl: webSocketUrl,
-    reconnectIntervalMs: reconnectIntervalMs,
-    maxReconnectAttempts: maxReconnectAttempts,
     webSocketChannelFactory: effectiveWebSocketChannelFactory,
+    useMockMode: useMockMode,
   );
 }

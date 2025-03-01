@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
-import 'package:meta/meta.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
@@ -71,12 +71,6 @@ class TransactionWebSocketService {
   /// WebSocket URL for the relayer
   final String _webSocketUrl;
   
-  /// Connection retry interval in milliseconds
-  final int _reconnectIntervalMs;
-  
-  /// Maximum number of reconnection attempts
-  final int _maxReconnectAttempts;
-  
   /// Factory function for creating WebSocket channels
   final WebSocketChannel Function(Uri) _webSocketChannelFactory;
   
@@ -98,15 +92,18 @@ class TransactionWebSocketService {
   /// Timer for reconnection attempts
   Timer? _reconnectTimer;
   
+  /// Flag indicating if the WebSocket connection is active
+  bool get isConnected => _channel != null;
+  
+  /// Flag to enable mock mode (no actual WebSocket connection)
+  final bool useMockMode;
+  
   /// Constructor
   TransactionWebSocketService({
     required String webSocketUrl,
-    int reconnectIntervalMs = 5000,
-    int maxReconnectAttempts = 10,
     WebSocketChannel Function(Uri)? webSocketChannelFactory,
+    this.useMockMode = false,
   }) : _webSocketUrl = webSocketUrl,
-       _reconnectIntervalMs = reconnectIntervalMs,
-       _maxReconnectAttempts = maxReconnectAttempts,
        _webSocketChannelFactory = webSocketChannelFactory ?? WebSocketChannel.connect;
 
   /// Initialize the service
@@ -193,7 +190,15 @@ class TransactionWebSocketService {
   /// Connect to the WebSocket server
   @protected
   Future<void> connectWebSocket() async {
+    // If in mock mode, don't actually connect to WebSocket
+    if (useMockMode) {
+      debugPrint('WebSocket in mock mode - not connecting to real server');
+      _reconnectAttempts = 0;
+      return;
+    }
+    
     try {
+      debugPrint('Attempting to connect to WebSocket at $_webSocketUrl (attempt ${_reconnectAttempts + 1})');
       _channel = _webSocketChannelFactory(Uri.parse(_webSocketUrl));
       
       // Listen for incoming messages
@@ -209,13 +214,48 @@ class TransactionWebSocketService {
         },
       );
       
-      // Reset reconnect attempts on successful connection
-      _reconnectAttempts = 0;
-      debugPrint('Connected to transaction status WebSocket');
+      // Send a ping to verify connection
+      try {
+        _sendMessage({
+          'type': 'ping',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        
+        // Reset reconnect attempts on successful connection
+        _reconnectAttempts = 0;
+        debugPrint('Connected to transaction status WebSocket');
+      } catch (e) {
+        debugPrint('Failed to send initial ping: $e');
+        scheduleReconnect();
+      }
     } catch (e) {
       debugPrint('Failed to connect to WebSocket: $e');
       scheduleReconnect();
     }
+  }
+
+  /// Schedule a reconnection attempt with exponential backoff
+  @protected
+  void scheduleReconnect() {
+    if (_reconnectTimer != null && _reconnectTimer!.isActive) {
+      return; // Already scheduled
+    }
+    
+    // Calculate backoff delay (max 30 seconds)
+    final delay = Duration(
+      milliseconds: math.min(
+        500 * math.pow(1.5, _reconnectAttempts).round(),
+        30000,
+      ),
+    );
+    
+    debugPrint('Scheduling reconnect in ${delay.inMilliseconds}ms (attempt ${_reconnectAttempts + 1})');
+    
+    _reconnectTimer = Timer(delay, () {
+      _reconnectAttempts++;
+      debugPrint('Attempting to reconnect (attempt $_reconnectAttempts)');
+      connectWebSocket();
+    });
   }
   
   /// Handle incoming WebSocket messages
@@ -276,32 +316,14 @@ class TransactionWebSocketService {
     }
   }
   
-  /// Schedule a reconnection attempt
-  @protected
-  void scheduleReconnect() {
-    // Cancel any existing reconnect timer
-    _reconnectTimer?.cancel();
-    
-    // Check if we've exceeded the maximum number of attempts
-    if (_reconnectAttempts >= _maxReconnectAttempts) {
-      debugPrint('Maximum reconnection attempts reached');
+  /// Send a message to the WebSocket server
+  void _sendMessage(Map<String, dynamic> message) {
+    // In mock mode, just log the message but don't try to send it
+    if (useMockMode) {
+      debugPrint('Mock WebSocket: Would send message: $message');
       return;
     }
     
-    _reconnectAttempts++;
-    
-    // Schedule reconnection
-    _reconnectTimer = Timer(
-      Duration(milliseconds: _reconnectIntervalMs),
-      () async {
-        debugPrint('Attempting to reconnect (attempt $_reconnectAttempts)');
-        await connectWebSocket();
-      },
-    );
-  }
-  
-  /// Send a message to the WebSocket server
-  void _sendMessage(Map<String, dynamic> message) {
     if (_channel == null) {
       debugPrint('Cannot send message: WebSocket not connected');
       return;
@@ -312,6 +334,12 @@ class TransactionWebSocketService {
     } catch (e) {
       debugPrint('Error sending WebSocket message: $e');
     }
+  }
+
+  /// Send a ping message to keep the connection alive
+  @protected
+  void sendPingMessage(Map<String, dynamic> pingMessage) {
+    _sendMessage(pingMessage);
   }
 
   /// Get the WebSocket channel (for subclasses)
@@ -325,4 +353,43 @@ class TransactionWebSocketService {
   /// Get user callbacks map (for subclasses)
   @protected
   Map<String, TransactionStatusCallback> get userCallbacks => _userCallbacks;
+
+  /// Simulate a transaction status update (only for mock mode)
+  /// This allows for testing and development without a real WebSocket connection
+  void simulateTransactionUpdate({
+    required String txHash,
+    required TransactionStatus status,
+    int? blockNumber,
+    int? confirmations,
+    String? errorMessage,
+    int? gasUsed,
+  }) {
+    if (!useMockMode) {
+      debugPrint('Warning: Attempted to simulate transaction update while not in mock mode');
+      return;
+    }
+    
+    final update = TransactionStatusUpdate(
+      txHash: txHash,
+      status: status,
+      blockNumber: blockNumber,
+      confirmations: confirmations,
+      errorMessage: errorMessage,
+      gasUsed: gasUsed,
+      timestamp: DateTime.now(),
+    );
+    
+    // Notify transaction-specific callbacks
+    if (_txCallbacks.containsKey(txHash)) {
+      _txCallbacks[txHash]!(update);
+    }
+    
+    // Notify user callbacks (we don't know which user this transaction belongs to,
+    // so we notify all user callbacks in mock mode)
+    for (final callback in _userCallbacks.values) {
+      callback(update);
+    }
+    
+    debugPrint('Mock WebSocket: Simulated transaction update for $txHash: $status');
+  }
 }

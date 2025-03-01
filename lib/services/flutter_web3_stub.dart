@@ -90,13 +90,15 @@ class JsonRpcProvider extends Provider {
 class TransactionOverride {
   /// Constructor
   TransactionOverride({
-    BigNumber? gasLimit,
-    BigNumber? gasPrice,
+    BigInt? gasLimit,
+    BigInt? gasPrice,
     String? from,
     String? to,
-    BigNumber? value,
+    BigInt? value,
     String? data,
     int? nonce,
+    BigInt? maxFeePerGas,
+    BigInt? maxPriorityFeePerGas,
   });
 }
 

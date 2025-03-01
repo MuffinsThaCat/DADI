@@ -9,13 +9,9 @@ class TransactionWebSocketServiceIO extends TransactionWebSocketService {
   /// Constructor
   TransactionWebSocketServiceIO({
     required String webSocketUrl,
-    int reconnectIntervalMs = 5000,
-    int maxReconnectAttempts = 10,
     WebSocketChannel Function(Uri)? webSocketChannelFactory,
   }) : super(
          webSocketUrl: webSocketUrl,
-         reconnectIntervalMs: reconnectIntervalMs,
-         maxReconnectAttempts: maxReconnectAttempts,
          webSocketChannelFactory: webSocketChannelFactory ?? 
              ((Uri url) => WebSocketChannel.connect(url)),
        );
@@ -41,11 +37,10 @@ TransactionWebSocketServiceIO createWebSocketService({
   int reconnectIntervalMs = 5000,
   int maxReconnectAttempts = 5,
   WebSocketChannelFactory? webSocketChannelFactory,
+  bool useMockMode = false,
 }) {
   return TransactionWebSocketServiceIO(
     webSocketUrl: webSocketUrl,
-    reconnectIntervalMs: reconnectIntervalMs,
-    maxReconnectAttempts: maxReconnectAttempts,
     webSocketChannelFactory: webSocketChannelFactory,
   );
 }

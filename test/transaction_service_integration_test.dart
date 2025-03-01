@@ -15,8 +15,6 @@ class MockTransactionWebSocketService extends TransactionWebSocketService {
   
   MockTransactionWebSocketService() : super(
     webSocketUrl: 'wss://test.example.com/ws',
-    reconnectIntervalMs: 100,
-    maxReconnectAttempts: 3,
   );
   
   @override
@@ -48,7 +46,10 @@ class MockTransactionWebSocketService extends TransactionWebSocketService {
   }
   
   // Helper method to simulate transaction updates
-  void simulateTransactionUpdate(String txHash, TransactionStatus status, {
+  @override
+  void simulateTransactionUpdate({
+    required String txHash,
+    required TransactionStatus status,
     int? blockNumber,
     int? confirmations,
     int? gasUsed,
@@ -243,8 +244,8 @@ void main() {
       
       // Update transaction status via WebSocket
       mockWebSocketService.simulateTransactionUpdate(
-        txHash,
-        TransactionStatus.confirmed,
+        txHash: txHash,
+        status: TransactionStatus.confirmed,
         blockNumber: 12345,
         confirmations: 3,
         gasUsed: 50000,
@@ -265,8 +266,8 @@ void main() {
       
       // Update transaction status to failed with error message
       mockWebSocketService.simulateTransactionUpdate(
-        txHash,
-        TransactionStatus.failed,
+        txHash: txHash,
+        status: TransactionStatus.failed,
         errorMessage: 'Transaction reverted: insufficient funds',
       );
       
@@ -289,8 +290,8 @@ void main() {
       
       // Update transaction status via WebSocket
       mockWebSocketService.simulateTransactionUpdate(
-        txHash,
-        TransactionStatus.confirmed,
+        txHash: txHash,
+        status: TransactionStatus.confirmed,
       );
       
       // Verify status is updated
@@ -311,8 +312,8 @@ void main() {
       
       // Update transaction status via WebSocket
       mockWebSocketService.simulateTransactionUpdate(
-        txHash,
-        TransactionStatus.failed,
+        txHash: txHash,
+        status: TransactionStatus.failed,
         errorMessage: 'Out of gas',
       );
       
@@ -364,8 +365,8 @@ void main() {
       
       // Update transaction status after reconnection
       mockWebSocketService.simulateTransactionUpdate(
-        txHash,
-        TransactionStatus.confirmed,
+        txHash: txHash,
+        status: TransactionStatus.confirmed,
       );
       
       // Verify status is still updated correctly
@@ -402,8 +403,8 @@ void main() {
       );
       
       mockWebSocketService.simulateTransactionUpdate(
-        txHash1,
-        TransactionStatus.confirmed,
+        txHash: txHash1,
+        status: TransactionStatus.confirmed,
       );
       
       final txHash2 = await provider.executeFunction(
@@ -414,8 +415,8 @@ void main() {
       );
       
       mockWebSocketService.simulateTransactionUpdate(
-        txHash2,
-        TransactionStatus.failed,
+        txHash: txHash2,
+        status: TransactionStatus.failed,
         errorMessage: 'Out of gas',
       );
       

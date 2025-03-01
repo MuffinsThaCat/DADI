@@ -14,8 +14,6 @@ dynamic createWebSocketService({
   // Return a stub implementation that does nothing
   return StubWebSocketService(
     webSocketUrl: webSocketUrl,
-    reconnectIntervalMs: reconnectIntervalMs,
-    maxReconnectAttempts: maxReconnectAttempts,
   );
 }
 
@@ -24,12 +22,8 @@ class StubWebSocketService extends TransactionWebSocketService {
   /// Constructor
   StubWebSocketService({
     required String webSocketUrl,
-    int reconnectIntervalMs = 5000,
-    int maxReconnectAttempts = 5,
   }) : super(
          webSocketUrl: webSocketUrl,
-         reconnectIntervalMs: reconnectIntervalMs,
-         maxReconnectAttempts: maxReconnectAttempts,
          webSocketChannelFactory: null,
        );
   

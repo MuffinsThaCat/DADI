@@ -5,7 +5,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
-import 'package:web_socket_channel/html.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:flutter/foundation.dart';
 import 'package:dadi/services/transaction_websocket_service.dart';
@@ -20,13 +19,10 @@ class TransactionWebSocketServiceImpl extends TransactionWebSocketService {
   StreamSubscription<html.Event>? _visibilityChangeSubscription;
   
   /// Subscription for online events
-  StreamSubscription<html.Event>? _onlineStatusSubscription;
+  StreamSubscription<html.Event>? _onlineSubscription;
   
   /// Subscription for offline events
-  StreamSubscription<html.Event>? _offlineStatusSubscription;
-  
-  /// Subscription for beforeunload events
-  StreamSubscription<html.Event>? _beforeUnloadSubscription;
+  StreamSubscription<html.Event>? _offlineSubscription;
   
   /// Subscription for focus events
   StreamSubscription<html.Event>? _focusSubscription;
@@ -34,13 +30,7 @@ class TransactionWebSocketServiceImpl extends TransactionWebSocketService {
   /// Subscription for blur events
   StreamSubscription<html.Event>? _blurSubscription;
   
-  /// Flag to track if tab was previously visible
-  bool _wasVisible = true;
-  
-  /// Flag to track if tab is currently focused
-  bool _isFocused = true;
-  
-  /// Timer for ping messages to keep connection alive
+  /// Timer for sending ping messages
   Timer? _pingTimer;
   
   /// Interval for ping messages in milliseconds (default: 30 seconds)
@@ -49,157 +39,108 @@ class TransactionWebSocketServiceImpl extends TransactionWebSocketService {
   /// Constructor with web-specific defaults
   TransactionWebSocketServiceImpl({
     required String webSocketUrl,
-    int reconnectIntervalMs = 2000, // Faster reconnect for web
-    int maxReconnectAttempts = 15,  // More attempts for web
-    int pingIntervalMs = 30000,     // 30 second ping interval
-    WebSocketChannelFactory? webSocketChannelFactory,
+    WebSocketChannel Function(Uri)? webSocketChannelFactory,
+    bool useMockMode = false,
+    int reconnectDelay = 3000,
+    int maxReconnectAttempts = 10,
+    int pingIntervalMs = 30000,
   }) : _pingIntervalMs = pingIntervalMs,
        super(
          webSocketUrl: webSocketUrl,
-         reconnectIntervalMs: reconnectIntervalMs,
-         maxReconnectAttempts: maxReconnectAttempts,
-         webSocketChannelFactory: webSocketChannelFactory ?? 
-             ((Uri url) => HtmlWebSocketChannel.connect(url)),
-       );
-  
-  @override
-  Future<void> initialize() async {
-    // Listen for visibility changes
-    _visibilityChangeSubscription = html.document.onVisibilityChange.listen(_handleVisibilityChange);
-    
-    // Listen for online/offline events
-    _onlineStatusSubscription = html.window.onOnline.listen(_handleOnline);
-    _offlineStatusSubscription = html.window.onOffline.listen(_handleOffline);
-    
-    // Listen for tab/window focus events
-    _focusSubscription = html.window.onFocus.listen(_handleFocus);
-    _blurSubscription = html.window.onBlur.listen(_handleBlur);
-    
-    // Listen for page unload events
-    _beforeUnloadSubscription = html.window.onBeforeUnload.listen(_handleBeforeUnload);
-    
-    // Start ping timer to keep connection alive
+         webSocketChannelFactory: webSocketChannelFactory,
+         useMockMode: useMockMode,
+       ) {
+    _setupBrowserEventListeners();
     _startPingTimer();
-    
-    // Initialize the service
-    await super.initialize();
   }
   
-  /// Start timer to send periodic ping messages
-  void _startPingTimer() {
-    _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(Duration(milliseconds: _pingIntervalMs), (_) {
-      _sendPing();
+  /// Set up browser-specific event listeners
+  void _setupBrowserEventListeners() {
+    // Listen for visibility changes
+    _visibilityChangeSubscription = html.document.onVisibilityChange.listen((_) {
+      _handleVisibilityChange();
+    });
+    
+    // Listen for online/offline events
+    _onlineSubscription = html.window.onOnline.listen((_) {
+      _log('Browser online event detected');
+      if (!isConnected) {
+        connectWebSocket();
+      }
+    });
+    
+    _offlineSubscription = html.window.onOffline.listen((_) {
+      _log('Browser offline event detected');
+      // No need to disconnect, the connection will fail naturally
+    });
+    
+    // Listen for focus/blur events
+    _focusSubscription = html.window.onFocus.listen((_) {
+      _log('Browser focus event detected');
+      if (!isConnected) {
+        connectWebSocket();
+      }
+    });
+    
+    _blurSubscription = html.window.onBlur.listen((_) {
+      _log('Browser blur event detected');
+      // Keep connection alive even when tab is not focused
     });
   }
   
-  /// Send a ping message to keep the connection alive
-  void _sendPing() {
-    try {
-      // Access the parent class's sendMessage method
+  /// Start the ping timer
+  void _startPingTimer() {
+    _pingTimer?.cancel();
+    _pingTimer = Timer.periodic(Duration(milliseconds: _pingIntervalMs), (_) {
       sendPingMessage({
         'type': 'ping',
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
-    } catch (e) {
-      debugPrint('Error sending ping: $e');
-    }
+    });
   }
   
-  /// Helper method to send a message via the parent class
+  /// Helper method to send a ping message
+  @override
   void sendPingMessage(Map<String, dynamic> message) {
-    // This is a workaround to access the protected _sendMessage method
-    final channel = super.channel;
-    if (channel != null) {
+    if (isConnected) {
+      _log('Sending ping message');
       try {
-        channel.sink.add(jsonEncode(message));
+        final wsChannel = channel;
+        if (wsChannel != null) {
+          wsChannel.sink.add(jsonEncode(message));
+        }
       } catch (e) {
-        debugPrint('Error sending WebSocket message: $e');
+        _log('Error sending ping message: $e');
       }
     }
   }
   
   /// Handle visibility change events
-  void _handleVisibilityChange(html.Event event) {
+  void _handleVisibilityChange() {
     final isVisible = html.document.visibilityState == 'visible';
+    _log('Visibility changed: ${isVisible ? 'visible' : 'hidden'}');
     
-    // If visibility changed from hidden to visible, reconnect
-    if (isVisible && !_wasVisible) {
-      debugPrint('Tab became visible, reconnecting WebSocket');
-      _reconnect();
-    }
-    
-    _wasVisible = isVisible;
-  }
-  
-  /// Handle online events
-  void _handleOnline(html.Event event) {
-    debugPrint('Browser went online, reconnecting WebSocket');
-    _reconnect();
-  }
-  
-  /// Handle offline events
-  void _handleOffline(html.Event event) {
-    debugPrint('Browser went offline, WebSocket will reconnect when online');
-  }
-  
-  /// Handle focus events
-  void _handleFocus(html.Event event) {
-    _isFocused = true;
-    debugPrint('Tab gained focus, reconnecting WebSocket if needed');
-    
-    // Only reconnect if we're focused to avoid unnecessary reconnections
-    if (_isFocused) {
-      _reconnect();
+    if (isVisible && !isConnected) {
+      _log('Document became visible, reconnecting WebSocket');
+      connectWebSocket();
     }
   }
   
-  /// Handle blur events
-  void _handleBlur(html.Event event) {
-    _isFocused = false;
-    debugPrint('Tab lost focus');
-  }
-  
-  /// Handle page unload events
-  void _handleBeforeUnload(html.Event event) {
-    // Clean up resources when page is unloaded
-    dispose();
-  }
-  
-  /// Reconnect the WebSocket
-  void _reconnect() {
-    scheduleReconnect();
+  /// Log a message with the TransactionWebSocketServiceWeb prefix
+  void _log(String message) {
+    debugPrint('TransactionWebSocketServiceWeb: $message');
   }
   
   @override
   Future<void> dispose() async {
-    // Cancel all event subscriptions
+    _pingTimer?.cancel();
     _visibilityChangeSubscription?.cancel();
-    _onlineStatusSubscription?.cancel();
-    _offlineStatusSubscription?.cancel();
-    _beforeUnloadSubscription?.cancel();
+    _onlineSubscription?.cancel();
+    _offlineSubscription?.cancel();
     _focusSubscription?.cancel();
     _blurSubscription?.cancel();
-    
-    // Cancel ping timer
-    _pingTimer?.cancel();
-    
-    // Call super to clean up base class resources
     await super.dispose();
   }
-  
-  /// For testing: Process a WebSocket message directly
-  void testHandleMessage(dynamic message) {
-    handleWebSocketMessage(message);
-  }
-  
-  /// For testing: Manually trigger a reconnection
-  void testTriggerReconnect() {
-    _reconnect();
-  }
-  
-  /// For testing: Callback to track connection attempts
-  Function? testConnectionAttemptCallback;
 }
 
 // Conditional stub implementation for non-web platforms
@@ -207,12 +148,8 @@ class TransactionWebSocketServiceStub extends TransactionWebSocketService {
   /// Constructor
   TransactionWebSocketServiceStub({
     required String webSocketUrl,
-    int reconnectIntervalMs = 5000,
-    int maxReconnectAttempts = 10,
   }) : super(
          webSocketUrl: webSocketUrl,
-         reconnectIntervalMs: reconnectIntervalMs,
-         maxReconnectAttempts: maxReconnectAttempts,
          webSocketChannelFactory: (url) => throw UnsupportedError(
            'TransactionWebSocketServiceStub should never be instantiated'),
        );
@@ -228,18 +165,15 @@ class TransactionWebSocketServiceStub extends TransactionWebSocketService {
   }
 }
 
-/// Creates a web-specific WebSocket service
-/// This function is used for testing and by the service factory
-TransactionWebSocketServiceImpl createWebSocketService({
+/// Factory function to create a web-specific WebSocket service
+TransactionWebSocketService createWebSocketService({
   required String webSocketUrl,
-  int reconnectIntervalMs = 5000,
-  int maxReconnectAttempts = 5,
-  WebSocketChannelFactory? webSocketChannelFactory,
+  required WebSocketChannelFactory webSocketChannelFactory,
+  bool useMockMode = false,
 }) {
   return TransactionWebSocketServiceImpl(
     webSocketUrl: webSocketUrl,
-    reconnectIntervalMs: reconnectIntervalMs,
-    maxReconnectAttempts: maxReconnectAttempts,
     webSocketChannelFactory: webSocketChannelFactory,
+    useMockMode: useMockMode,
   );
 }

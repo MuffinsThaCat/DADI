@@ -1,4 +1,5 @@
 import 'device_control_slot.dart';
+import 'auction_status.dart';
 
 class Auction {
   final String deviceId;
@@ -123,6 +124,24 @@ class Auction {
     } else {
       return 'Ended';
     }
+  }
+
+  // Get the current status of the auction
+  AuctionStatus get status {
+    if (!isActive) {
+      return AuctionStatus.cancelled;
+    }
+    
+    if (isFinalized) {
+      return AuctionStatus.finalized;
+    }
+    
+    final now = DateTime.now();
+    if (endTime.isBefore(now)) {
+      return AuctionStatus.ended;
+    }
+    
+    return AuctionStatus.active;
   }
 
   // Copy with method for immutability

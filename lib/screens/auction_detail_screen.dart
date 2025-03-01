@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/auction.dart';
 import '../models/device_control_slot.dart';
+import '../models/auction_status.dart';
 import '../services/web3_service.dart';
 import '../widgets/time_slot_selector.dart';
 import '../widgets/slot_duration_selector.dart';
@@ -51,17 +52,19 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
   }
 
   void _generateControlSlots() {
-    // For now, we'll create mock control slots
-    // In a real implementation, these would come from the auction data
+    // Create control slots based on the auction time range and selected duration
     final List<DeviceControlSlot> slots = [];
     
-    // Create slots with the selected duration within the auction time range
+    // Get the total auction duration in minutes
+    final totalDurationMinutes = _auction.endTime.difference(_auction.startTime).inMinutes;
+    
+    // Calculate number of slots based on the selected duration
+    final int numberOfSlots = totalDurationMinutes ~/ _slotDurationMinutes;
+    
+    // Create slots with equal duration
     DateTime slotStart = _auction.startTime;
-    while (slotStart.isBefore(_auction.endTime)) {
+    for (int i = 0; i < numberOfSlots; i++) {
       final slotEnd = slotStart.add(Duration(minutes: _slotDurationMinutes));
-      if (slotEnd.isAfter(_auction.endTime)) {
-        break;
-      }
       
       slots.add(DeviceControlSlot(
         startTime: slotStart,
@@ -70,6 +73,15 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
       ));
       
       slotStart = slotEnd;
+    }
+    
+    // If there's any remaining time that doesn't fit evenly, add a final shorter slot
+    if (slotStart.isBefore(_auction.endTime)) {
+      slots.add(DeviceControlSlot(
+        startTime: slotStart,
+        endTime: _auction.endTime,
+        isAvailable: true,
+      ));
     }
     
     setState(() {
@@ -139,7 +151,7 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
       return;
     }
     
-    if (_selectedTimeSlot == null) {
+    if (_selectedTimeSlot == null && !widget.web3Service.isMockMode) {
       setState(() {
         _statusMessage = 'Please select a time slot';
         _showStatusMessage = true;
@@ -184,6 +196,46 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
       setState(() {
         _isLoading = false;
         _statusMessage = 'Error placing bid: $e';
+        _showStatusMessage = true;
+      });
+    }
+  }
+
+  // Method to place a mock bid with a random amount
+  Future<void> _placeMockBid() async {
+    setState(() {
+      _isLoading = true;
+      _statusMessage = 'Placing mock bid...';
+      _showStatusMessage = true;
+    });
+    
+    try {
+      final result = await widget.web3Service.placeMockBid(_auction.deviceId);
+      
+      if (result.success) {
+        // Refresh auction data after placing bid
+        await _refreshAuctionData();
+        
+        setState(() {
+          _statusMessage = 'Mock bid placed successfully!';
+          _showStatusMessage = true;
+          _isLoading = false;
+        });
+        
+        if (widget.onAuctionUpdated != null) {
+          widget.onAuctionUpdated!();
+        }
+      } else {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = 'Error placing mock bid: ${result.message}';
+          _showStatusMessage = true;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _statusMessage = 'Error placing mock bid: $e';
         _showStatusMessage = true;
       });
     }
@@ -301,20 +353,27 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final bool isOwner = _auction.owner.toLowerCase() == widget.web3Service.currentAddress?.toLowerCase();
-    final bool canFinalize = isOwner && 
-                            _auction.isActive && 
-                            DateTime.now().isAfter(_auction.endTime);
-    final bool canBid = !isOwner && 
-                       _auction.isActive && 
-                       DateTime.now().isBefore(_auction.endTime);
-    final bool canCancel = isOwner && 
-                          _auction.isActive && 
-                          _auction.highestBid == 0;
+    final bool canBid = _auction.status == AuctionStatus.active;
+    final bool canFinalize = _auction.status == AuctionStatus.ended || 
+                          (DateTime.now().isAfter(_auction.endTime) && _auction.status == AuctionStatus.active);
+    final bool canCancel = _auction.status == AuctionStatus.active && 
+                        _auction.highestBidder.isEmpty;
+    final bool isMockMode = widget.web3Service.isMockMode;
     
     return Scaffold(
       appBar: AppBar(
         title: const Text('Auction Details'),
+        actions: [
+          if (isMockMode)
+            Padding(
+              padding: const EdgeInsets.only(right: 16.0),
+              child: const Chip(
+                label: Text('MOCK MODE'),
+                backgroundColor: Colors.orange,
+                labelStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+        ],
       ),
       body: _isLoading 
         ? const Center(child: CircularProgressIndicator())
@@ -357,20 +416,23 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
                         Row(
                           children: [
                             Icon(
-                              _auction.isActive ? Icons.check_circle : Icons.cancel,
-                              color: _auction.isActive ? Colors.green : Colors.red,
+                              _auction.status == AuctionStatus.active ? Icons.check_circle : Icons.cancel,
+                              color: _auction.status == AuctionStatus.active ? Colors.green : 
+                                     _auction.status == AuctionStatus.ended ? Colors.orange : Colors.red,
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              _auction.isActive ? 'Active' : 'Inactive',
+                              _auction.status == AuctionStatus.active ? 'Active and Not Finalized' : 
+                              _auction.status == AuctionStatus.ended ? 'Ended' : 
+                              _auction.status == AuctionStatus.finalized ? 'Finalized' : 'Cancelled',
                               style: TextStyle(
-                                color: _auction.isActive ? Colors.green : Colors.red,
+                                color: _auction.status == AuctionStatus.active ? Colors.green : 
+                                       _auction.status == AuctionStatus.ended ? Colors.orange : Colors.red,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
                         Row(
                           children: [
                             Icon(
@@ -413,6 +475,7 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
                   SlotDurationSelector(
                     onDurationSelected: _onDurationSelected,
                     selectedDuration: _slotDurationMinutes,
+                    totalDurationMinutes: _auction.endTime.difference(_auction.startTime).inMinutes,
                   ),
                 
                 const SizedBox(height: 24),
@@ -452,13 +515,32 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
                               ),
                             ),
                           ),
+                          
+                          // Add mock bid button in mock mode
+                          if (isMockMode && canBid)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton(
+                                  onPressed: _placeMockBid,
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(color: Colors.orange),
+                                  ),
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 12.0),
+                                    child: Text('Place Random Mock Bid', style: TextStyle(color: Colors.orange)),
+                                  ),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
                   ),
                 
                 // Finalize auction button (for owner)
-                if (canFinalize)
+                if (canFinalize || (isMockMode && canBid))
                   Padding(
                     padding: const EdgeInsets.only(top: 24.0),
                     child: SizedBox(
@@ -468,9 +550,9 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
                         ),
-                        child: const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12.0),
-                          child: Text('Finalize Auction'),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12.0),
+                          child: Text(isMockMode ? 'Finalize Mock Auction' : 'Finalize Auction'),
                         ),
                       ),
                     ),
