@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/meta_transaction_service.dart';
 import '../contracts/meta_transaction_relayer.dart';
+import '../services/transaction_websocket_service.dart';
 
 /// Status of a meta-transaction
 enum MetaTransactionStatus {
@@ -17,6 +18,9 @@ enum MetaTransactionStatus {
   
   /// Transaction failed
   failed,
+  
+  /// Transaction status is unknown
+  unknown,
 }
 
 /// Represents a meta-transaction with its status and details
@@ -84,6 +88,7 @@ class MetaTransaction {
 /// Provider for managing meta-transactions
 class MetaTransactionProvider extends ChangeNotifier {
   final MetaTransactionRelayer _relayer;
+  final TransactionWebSocketService? _webSocketService;
   
   /// Maximum number of free transactions per day
   final int _maxDailyQuota = 10;
@@ -97,7 +102,7 @@ class MetaTransactionProvider extends ChangeNotifier {
   /// List of recent transactions
   final List<MetaTransaction> _transactions = [];
   
-  /// Timer for checking transaction status
+  /// Timer for checking transaction status (used as fallback if WebSocket is unavailable)
   Timer? _statusCheckTimer;
   
   /// Avalanche configuration
@@ -116,14 +121,74 @@ class MetaTransactionProvider extends ChangeNotifier {
     required String typeName,
     required String typeSuffixData,
     required String trustedForwarderAddress,
+    TransactionWebSocketService? webSocketService,
   }) : _relayer = relayer,
+       _webSocketService = webSocketService,
        _domainName = domainName,
        _domainVersion = domainVersion,
        _typeName = typeName,
        _typeSuffixData = typeSuffixData,
        _trustedForwarderAddress = trustedForwarderAddress {
     _initQuota();
-    _startStatusCheckTimer();
+    
+    // Initialize WebSocket service if available
+    if (_webSocketService != null) {
+      _initializeWebSocketService();
+    } else {
+      // Fall back to polling if WebSocket is not available
+      _startStatusCheckTimer();
+    }
+  }
+  
+  /// Initialize WebSocket service
+  Future<void> _initializeWebSocketService() async {
+    await _webSocketService!.initialize();
+    
+    // Register callback for user transactions
+    // This assumes we're tracking all transactions for the current user
+    final userAddress = await _relayer.getUserAddress();
+    if (userAddress != null) {
+      _webSocketService!.watchUserTransactions(
+        userAddress,
+        _handleTransactionStatusUpdate,
+      );
+    }
+  }
+  
+  /// Handle transaction status updates from WebSocket
+  void _handleTransactionStatusUpdate(TransactionStatusUpdate update) {
+    // Find transaction by hash
+    final index = _transactions.indexWhere((tx) => tx.txHash == update.txHash);
+    if (index >= 0) {
+      // Convert TransactionStatus to MetaTransactionStatus
+      final status = _convertWebSocketStatus(update.status);
+      
+      // Update transaction
+      _updateTransaction(
+        _transactions[index].id,
+        status: status,
+        error: update.errorMessage,
+      );
+    }
+  }
+  
+  /// Convert WebSocket transaction status to MetaTransactionStatus
+  MetaTransactionStatus _convertWebSocketStatus(TransactionStatus status) {
+    switch (status) {
+      case TransactionStatus.submitted:
+        return MetaTransactionStatus.submitted;
+      case TransactionStatus.processing:
+        return MetaTransactionStatus.processing;
+      case TransactionStatus.confirmed:
+        return MetaTransactionStatus.confirmed;
+      case TransactionStatus.failed:
+        return MetaTransactionStatus.failed;
+      case TransactionStatus.dropped:
+        return MetaTransactionStatus.failed;
+      case TransactionStatus.unknown:
+      default:
+        return MetaTransactionStatus.unknown;
+    }
   }
   
   /// Initialize quota from storage
@@ -135,7 +200,7 @@ class MetaTransactionProvider extends ChangeNotifier {
     notifyListeners();
   }
   
-  /// Start timer to periodically check transaction status
+  /// Start timer to periodically check transaction status (fallback method)
   void _startStatusCheckTimer() {
     _statusCheckTimer?.cancel();
     _statusCheckTimer = Timer.periodic(
@@ -147,7 +212,29 @@ class MetaTransactionProvider extends ChangeNotifier {
   @override
   void dispose() {
     _statusCheckTimer?.cancel();
+    
+    // Clean up WebSocket subscriptions
+    if (_webSocketService != null) {
+      _cleanupWebSocketSubscriptions();
+    }
+    
     super.dispose();
+  }
+  
+  /// Clean up WebSocket subscriptions
+  Future<void> _cleanupWebSocketSubscriptions() async {
+    // Unwatch all transaction subscriptions
+    for (final tx in _transactions) {
+      if (tx.txHash != null) {
+        _webSocketService!.unwatchTransaction(tx.txHash!);
+      }
+    }
+    
+    // Unwatch user transactions
+    final userAddress = await _relayer.getUserAddress();
+    if (userAddress != null) {
+      _webSocketService!.unwatchUserTransactions(userAddress);
+    }
   }
   
   /// Get the list of recent transactions
@@ -212,6 +299,11 @@ class MetaTransactionProvider extends ChangeNotifier {
         txHash: txHash,
       );
       
+      // Register for WebSocket updates if available
+      if (_webSocketService != null) {
+        _webSocketService!.watchTransaction(txHash, _handleTransactionStatusUpdate);
+      }
+      
       // Increment used quota
       _usedQuota++;
       notifyListeners();
@@ -247,8 +339,11 @@ class MetaTransactionProvider extends ChangeNotifier {
     }
   }
   
-  /// Check status of pending transactions
+  /// Check status of pending transactions (fallback method when WebSocket is unavailable)
   Future<void> _checkPendingTransactions() async {
+    // Skip if WebSocket service is active
+    if (_webSocketService != null) return;
+    
     final pendingTransactions = _transactions.where(
       (tx) => tx.status == MetaTransactionStatus.processing,
     ).toList();
@@ -278,6 +373,15 @@ class MetaTransactionProvider extends ChangeNotifier {
   
   /// Clear transaction history
   void clearHistory() {
+    // Unwatch all transactions if WebSocket is available
+    if (_webSocketService != null) {
+      for (final tx in _transactions) {
+        if (tx.txHash != null) {
+          _webSocketService?.unwatchTransaction(tx.txHash!);
+        }
+      }
+    }
+    
     _transactions.clear();
     notifyListeners();
   }

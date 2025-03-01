@@ -169,6 +169,8 @@ class _TransactionListItem extends StatelessWidget {
         return const Icon(Icons.check_circle, color: Colors.green);
       case MetaTransactionStatus.failed:
         return const Icon(Icons.error, color: Colors.red);
+      case MetaTransactionStatus.unknown:
+        return const Icon(Icons.help_outline, color: Colors.grey);
     }
   }
 
@@ -183,6 +185,8 @@ class _TransactionListItem extends StatelessWidget {
         return 'Confirmed';
       case MetaTransactionStatus.failed:
         return 'Failed';
+      case MetaTransactionStatus.unknown:
+        return 'Unknown';
     }
   }
 
@@ -197,6 +201,8 @@ class _TransactionListItem extends StatelessWidget {
         return Colors.green;
       case MetaTransactionStatus.failed:
         return Colors.red;
+      case MetaTransactionStatus.unknown:
+        return Colors.grey;
     }
   }
 }

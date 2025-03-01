@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../contracts/meta_transaction_relayer.dart';
 import 'wallet_service_interface.dart';
+import 'transaction_websocket_service.dart';
 
 /// Service for interacting with the auction contract using meta-transactions
 /// This allows users to participate in auctions without paying gas fees
@@ -40,6 +41,7 @@ class AuctionServiceMeta {
   Future<String> placeBid({
     required String deviceId,
     required double bidAmount,
+    Function(TransactionStatusUpdate)? onStatusUpdate,
   }) async {
     if (!_walletService.isUnlocked) {
       throw Exception('Wallet must be unlocked to place a bid');
@@ -71,6 +73,7 @@ class AuctionServiceMeta {
         typeName: _typeName,
         typeSuffixData: _typeSuffixData,
         trustedForwarderAddress: _trustedForwarderAddress,
+        onStatusUpdate: onStatusUpdate,
       );
     } catch (e) {
       debugPrint('Error placing bid via meta-transaction: ${e.toString()}');
@@ -81,6 +84,7 @@ class AuctionServiceMeta {
   /// Finalize an auction using a meta-transaction
   Future<String> finalizeAuction({
     required String deviceId,
+    Function(TransactionStatusUpdate)? onStatusUpdate,
   }) async {
     if (!_walletService.isUnlocked) {
       throw Exception('Wallet must be unlocked to finalize an auction');
@@ -106,6 +110,7 @@ class AuctionServiceMeta {
         typeName: _typeName,
         typeSuffixData: _typeSuffixData,
         trustedForwarderAddress: _trustedForwarderAddress,
+        onStatusUpdate: onStatusUpdate,
       );
     } catch (e) {
       debugPrint('Error finalizing auction via meta-transaction: ${e.toString()}');
@@ -118,6 +123,7 @@ class AuctionServiceMeta {
     required String deviceId,
     required double reservePrice,
     required int duration,
+    Function(TransactionStatusUpdate)? onStatusUpdate,
   }) async {
     if (!_walletService.isUnlocked) {
       throw Exception('Wallet must be unlocked to create an auction');
@@ -150,6 +156,7 @@ class AuctionServiceMeta {
         typeName: _typeName,
         typeSuffixData: _typeSuffixData,
         trustedForwarderAddress: _trustedForwarderAddress,
+        onStatusUpdate: onStatusUpdate,
       );
     } catch (e) {
       debugPrint('Error creating auction via meta-transaction: ${e.toString()}');
@@ -160,6 +167,7 @@ class AuctionServiceMeta {
   /// Cancel an auction using a meta-transaction
   Future<String> cancelAuction({
     required String deviceId,
+    Function(TransactionStatusUpdate)? onStatusUpdate,
   }) async {
     if (!_walletService.isUnlocked) {
       throw Exception('Wallet must be unlocked to cancel an auction');
@@ -175,7 +183,7 @@ class AuctionServiceMeta {
         throw Exception('Meta-transaction quota exceeded');
       }
       
-      // Execute the cancel function via meta-transaction
+      // Execute the cancel auction function via meta-transaction
       return await _relayer.executeFunction(
         targetContract: _auctionContractAddress,
         functionSignature: 'cancelAuction(bytes32)',
@@ -185,10 +193,31 @@ class AuctionServiceMeta {
         typeName: _typeName,
         typeSuffixData: _typeSuffixData,
         trustedForwarderAddress: _trustedForwarderAddress,
+        onStatusUpdate: onStatusUpdate,
       );
     } catch (e) {
       debugPrint('Error canceling auction via meta-transaction: ${e.toString()}');
       throw Exception('Failed to cancel auction: ${e.toString()}');
     }
+  }
+  
+  /// Get transaction status updates for a specific transaction
+  Stream<TransactionStatusUpdate>? getTransactionStatusStream(String txHash) {
+    return _relayer.getTransactionStatusStream(txHash);
+  }
+  
+  /// Get transaction status updates for all transactions from a specific user
+  Stream<TransactionStatusUpdate>? getUserTransactionStatusStream(String userAddress) {
+    return _relayer.getUserTransactionStatusStream(userAddress);
+  }
+  
+  /// Stop watching a specific transaction
+  void unwatchTransaction(String txHash) {
+    _relayer.unwatchTransaction(txHash);
+  }
+  
+  /// Stop watching all transactions for a specific user
+  void unwatchUserTransactions(String userAddress) {
+    _relayer.unwatchUserTransactions(userAddress);
   }
 }

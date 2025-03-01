@@ -26,6 +26,11 @@ class _WalletScreenState extends State<WalletScreen> with SingleTickerProviderSt
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _walletService = WalletServiceFactory.createWalletService();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     _checkWalletStatus();
   }
 
@@ -50,9 +55,20 @@ class _WalletScreenState extends State<WalletScreen> with SingleTickerProviderSt
       setState(() {
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error checking wallet status: ${e.toString()}')),
-      );
+      
+      // Use a post-frame callback to show the SnackBar after the current frame
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          try {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error checking wallet status: ${e.toString()}')),
+            );
+          } catch (snackBarError) {
+            // Ignore ScaffoldMessenger errors in tests
+            print('Could not show SnackBar: $snackBarError');
+          }
+        });
+      }
     }
   }
 
@@ -85,10 +101,12 @@ class _WalletScreenState extends State<WalletScreen> with SingleTickerProviderSt
                   controller: _tabController,
                   tabs: const [
                     Tab(
+                      key: Key('create'),
                       text: 'Create Wallet',
                       icon: Icon(Icons.add_circle_outline),
                     ),
                     Tab(
+                      key: Key('import'),
                       text: 'Import Wallet',
                       icon: Icon(Icons.file_download_outlined),
                     ),

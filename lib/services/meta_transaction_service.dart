@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:web3dart/crypto.dart';
 import 'wallet_service_interface.dart';
+import 'transaction_websocket_service.dart';
 
 /// Service for handling gasless meta-transactions on Avalanche
 /// This allows users to interact with smart contracts without paying gas fees
@@ -10,6 +12,7 @@ import 'wallet_service_interface.dart';
 class MetaTransactionService {
   final String _relayerUrl;
   final WalletServiceInterface _walletService;
+  final TransactionWebSocketService? _webSocketService;
   
   // Avalanche C-Chain ID
   static const int _avalancheCChainId = 43114; // 0xa86a in hex
@@ -21,8 +24,13 @@ class MetaTransactionService {
   MetaTransactionService({
     required String relayerUrl,
     required WalletServiceInterface walletService,
+    TransactionWebSocketService? webSocketService,
   }) : _relayerUrl = relayerUrl,
-       _walletService = walletService;
+       _walletService = walletService,
+       _webSocketService = webSocketService;
+  
+  /// Get the WebSocket service instance
+  TransactionWebSocketService? get webSocketService => _webSocketService;
   
   /// Execute a meta-transaction through a relayer
   /// The relayer will pay the gas fees on behalf of the user
@@ -38,6 +46,7 @@ class MetaTransactionService {
     int? nonce,
     int? gasLimit,
     int? validUntilTime,
+    Function(TransactionStatusUpdate)? onStatusUpdate,
   }) async {
     if (!_walletService.isUnlocked) {
       throw Exception('Wallet must be unlocked to execute meta-transactions');
@@ -106,11 +115,87 @@ class MetaTransactionService {
       }
       
       final responseData = jsonDecode(response.body);
-      return responseData['txHash'];
+      final txHash = responseData['txHash'];
+      
+      // If WebSocket service is available, register for transaction updates
+      if (_webSocketService != null && onStatusUpdate != null) {
+        await _webSocketService!.initialize();
+        _webSocketService!.watchTransaction(txHash, onStatusUpdate);
+      }
+      
+      return txHash;
     } catch (e) {
       debugPrint('Error executing meta-transaction: $e');
       throw Exception('Failed to execute meta-transaction: ${e.toString()}');
     }
+  }
+  
+  /// Get transaction status updates for a specific transaction
+  /// Returns null if WebSocket service is not available
+  Stream<TransactionStatusUpdate>? getTransactionStatusStream(String txHash) {
+    if (_webSocketService == null) {
+      return null;
+    }
+    
+    // Create a stream controller for transaction updates
+    final controller = StreamController<TransactionStatusUpdate>();
+    
+    // Initialize WebSocket service and register for updates
+    _webSocketService!.initialize().then((_) {
+      _webSocketService!.watchTransaction(txHash, (update) {
+        controller.add(update);
+        
+        // Close the controller when transaction is confirmed or failed
+        if (update.status == TransactionStatus.confirmed || 
+            update.status == TransactionStatus.failed ||
+            update.status == TransactionStatus.dropped) {
+          controller.close();
+          _webSocketService!.unwatchTransaction(txHash);
+        }
+      });
+    });
+    
+    // Return the stream
+    return controller.stream;
+  }
+  
+  /// Get transaction status updates for all transactions from a specific user
+  /// Returns null if WebSocket service is not available
+  Stream<TransactionStatusUpdate>? getUserTransactionStatusStream(String userAddress) {
+    if (_webSocketService == null) {
+      return null;
+    }
+    
+    // Create a stream controller for transaction updates
+    final controller = StreamController<TransactionStatusUpdate>();
+    
+    // Initialize WebSocket service and register for updates
+    _webSocketService!.initialize().then((_) {
+      _webSocketService!.watchUserTransactions(userAddress, (update) {
+        controller.add(update);
+      });
+    });
+    
+    // Return the stream
+    return controller.stream;
+  }
+  
+  /// Get the current user's address
+  Future<String?> getUserAddress() async {
+    if (!_walletService.isUnlocked) {
+      return null;
+    }
+    return _walletService.currentAddress;
+  }
+  
+  /// Stop watching a specific transaction
+  void unwatchTransaction(String txHash) {
+    _webSocketService?.unwatchTransaction(txHash);
+  }
+  
+  /// Stop watching all transactions for a specific user
+  void unwatchUserTransactions(String userAddress) {
+    _webSocketService?.unwatchUserTransactions(userAddress);
   }
   
   /// Get the current nonce for a user on a specific contract

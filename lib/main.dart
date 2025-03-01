@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import 'services/web3_service.dart';
 import 'services/mock_buttplug_service.dart';
 import 'services/wallet_service_interface.dart';
-import 'services/wallet_service_factory.dart';
+import 'services/service_factory.dart';
 import 'services/meta_transaction_service.dart';
 import 'contracts/meta_transaction_relayer.dart';
 import 'providers/meta_transaction_provider.dart';
@@ -33,37 +33,47 @@ void main() async {
   // Initialize Web3Service
   final web3Service = Web3Service();
   
-  // Initialize WalletService
-  final walletService = WalletServiceFactory.createWalletService();
-  _log('Wallet service initialized');
-  
-  // Initialize Avalanche Meta-Transaction Services
-  final metaTransactionService = MetaTransactionService(
-    relayerUrl: 'https://relayer.dadi.network', // Replace with actual Avalanche relayer URL
-    walletService: walletService,
-  );
-  
-  // Avalanche trusted forwarder contract address
+  // Avalanche configuration
+  const relayerUrl = 'https://relayer.dadi.network'; // Replace with actual Avalanche relayer URL
+  const webSocketUrl = 'wss://relayer.dadi.network/ws'; // WebSocket URL for transaction status updates
   const trustedForwarderAddress = '0x52C84043CD9c865236f11d9Fc9F56aa003c1f922'; // Replace with actual deployed address
+  const auctionContractAddress = '0x1234567890123456789012345678901234567890'; // Replace with actual deployed address
+  const domainName = 'DADI Auction'; // Domain name registered with the forwarder
+  const domainVersion = '1'; // Domain version registered with the forwarder
+  const typeName = 'my type name'; // Type name registered with the forwarder
+  const typeSuffixData = 'bytes8 typeSuffixDatadatadatada)'; // Type suffix registered with the forwarder
   
-  // Initialize Meta-Transaction Relayer
-  final metaTransactionRelayer = MetaTransactionRelayer(
-    metaTransactionService: metaTransactionService,
+  // Create all services using the factory
+  final services = ServiceFactory.createAllServices(
+    relayerUrl: relayerUrl,
+    webSocketUrl: webSocketUrl,
     relayerContractAddress: trustedForwarderAddress,
+    auctionContractAddress: auctionContractAddress,
+    domainName: domainName,
+    domainVersion: domainVersion,
+    typeName: typeName,
+    typeSuffixData: typeSuffixData,
+    trustedForwarderAddress: trustedForwarderAddress,
   );
+  
+  final walletService = services['walletService'] as WalletServiceInterface;
+  final metaTransactionService = services['metaTransactionService'] as MetaTransactionService;
+  final metaTransactionRelayer = services['relayer'] as MetaTransactionRelayer;
+  
+  _log('Wallet service initialized');
+  _log('Meta-transaction services initialized for Avalanche with WebSocket support');
   
   // Initialize Meta-Transaction Provider with Avalanche parameters
   final metaTransactionProvider = MetaTransactionProvider(
     metaTransactionService: metaTransactionService,
     relayer: metaTransactionRelayer,
-    domainName: 'DADI Auction', // Domain name registered with the forwarder
-    domainVersion: '1', // Domain version registered with the forwarder
-    typeName: 'my type name', // Type name registered with the forwarder
-    typeSuffixData: 'bytes8 typeSuffixDatadatadatada)', // Type suffix registered with the forwarder
+    domainName: domainName,
+    domainVersion: domainVersion,
+    typeName: typeName,
+    typeSuffixData: typeSuffixData,
     trustedForwarderAddress: trustedForwarderAddress,
+    webSocketService: metaTransactionService.webSocketService,
   );
-  
-  _log('Meta-transaction services initialized for Avalanche');
   
   // Check Ethereum provider status
   _log('Checking Ethereum provider status...');
@@ -99,74 +109,49 @@ void main() async {
       }).catchError((jsonRpcError) {
         _log('Error connecting with JsonRpcProvider:', error: jsonRpcError);
         // Fall back to mock mode
-        if (!web3Service.isMockMode) {
-          _log('Setting mock mode to true due to JsonRpc error');
-          web3Service.isMockMode = true;
-        }
+        _log('Setting mock mode to true due to error');
+        web3Service.isMockMode = true;
       });
     }
   }).catchError((error) {
     _log('Error connecting to blockchain:', error: error);
-    
-    // Try connecting with JsonRpcProvider directly
-    _log('Trying direct JsonRpc connection after error');
-    web3Service.connectWithJsonRpc().then((jsonRpcSuccess) {
-      if (jsonRpcSuccess) {
-        _log('Successfully connected with JsonRpcProvider after error');
-      } else {
-        _log('Failed to connect with JsonRpcProvider, falling back to mock mode');
-        // Fall back to mock mode
-        if (!web3Service.isMockMode) {
-          _log('Setting mock mode to true due to failed JsonRpc connection');
-          web3Service.isMockMode = true;
-        }
-      }
-    }).catchError((jsonRpcError) {
-      _log('Error connecting with JsonRpcProvider:', error: jsonRpcError);
-      // Fall back to mock mode
-      if (!web3Service.isMockMode) {
-        _log('Setting mock mode to true due to JsonRpc error');
-        web3Service.isMockMode = true;
-      }
-    });
+    // Fall back to mock mode
+    _log('Setting mock mode to true due to error');
+    web3Service.isMockMode = true;
   });
   
-  runApp(MyApp(
-    web3Service: web3Service,
-    walletService: walletService,
-    metaTransactionProvider: metaTransactionProvider,
-  ));
+  // Initialize the MockButtplugService
+  final mockButtplugService = MockButtplugService();
+  
+  // Run the app
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => web3Service),
+        ChangeNotifierProvider(create: (context) => mockButtplugService),
+        ChangeNotifierProvider(create: (context) => metaTransactionProvider),
+        Provider<WalletServiceInterface>(create: (context) => walletService),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
-  final Web3Service web3Service;
-  final WalletServiceInterface walletService;
-  final MetaTransactionProvider metaTransactionProvider;
-  
-  const MyApp({
-    super.key, 
-    required this.web3Service,
-    required this.walletService,
-    required this.metaTransactionProvider,
-  });
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider.value(value: web3Service),
-        ChangeNotifierProvider.value(value: walletService),
-        ChangeNotifierProvider.value(value: metaTransactionProvider),
-        ChangeNotifierProvider(create: (_) => MockButtplugService()),
-      ],
-      child: MaterialApp(
-        title: 'DADI',
-        theme: AppTheme.lightTheme, // Use our new theme
-        home: const HomeScreenNew(), // Update the home screen
-        routes: {
-          MetaTransactionScreen.routeName: (ctx) => const MetaTransactionScreen(),
-        },
-      ),
+    return MaterialApp(
+      title: 'DADI',
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: ThemeMode.system,
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const HomeScreenNew(),
+        '/meta-transaction': (context) => const MetaTransactionScreen(),
+      },
     );
   }
 }
