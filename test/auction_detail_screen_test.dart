@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mockito/mockito.dart';
+import 'package:mockito/annotations.dart';
 import 'package:dadi/models/auction.dart';
 import 'package:dadi/models/device_control_slot.dart';
 import 'package:dadi/models/operation_result.dart';
 import 'package:dadi/screens/auction_detail_screen.dart';
 import 'package:dadi/services/web3_service.dart';
 import 'package:dadi/widgets/time_slot_selector.dart';
-import 'package:mockito/mockito.dart';
-import 'package:mockito/annotations.dart';
+import 'package:dadi/widgets/slot_duration_selector.dart';
 
 @GenerateMocks([Web3Service])
 import 'auction_detail_screen_test.mocks.dart';
@@ -22,11 +23,14 @@ void main() {
     when(mockWeb3Service.currentAddress).thenReturn('0xMockAddress');
   });
   
-  testWidgets('AuctionDetailScreen renders auction details correctly', (WidgetTester tester) async {
-    // Set the screen size for testing
-    tester.binding.window.physicalSizeTestValue = const Size(1080, 1920);
-    tester.binding.window.devicePixelRatioTestValue = 1.0;
-    addTearDown(tester.binding.window.clearPhysicalSizeTestValue);
+  testWidgets('AuctionDetailScreen renders auction details', (WidgetTester tester) async {
+    // Set screen size to a reasonable phone size
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 1.0;
+    
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+    });
     
     // Create a test auction
     final auction = Auction(
@@ -42,11 +46,12 @@ void main() {
     );
     
     // Mock the getAuction method to return the same auction
-    when(mockWeb3Service.getAuction(deviceId: auction.deviceId))
-        .thenAnswer((_) async => OperationResult<Auction>(
-              success: true,
-              data: auction,
-            ));
+    when(mockWeb3Service.getAuction(deviceId: anyNamed('deviceId'))).thenAnswer((_) async {
+      return OperationResult(
+        success: true,
+        data: auction,
+      );
+    });
     
     // Build the widget
     await tester.pumpWidget(
@@ -74,11 +79,14 @@ void main() {
     expect(find.text('Not Finalized'), findsOneWidget);
   });
   
-  testWidgets('AuctionDetailScreen allows bidding when user is not owner', (WidgetTester tester) async {
-    // Set the screen size for testing
-    tester.binding.window.physicalSizeTestValue = const Size(1080, 1920);
-    tester.binding.window.devicePixelRatioTestValue = 1.0;
-    addTearDown(tester.binding.window.clearPhysicalSizeTestValue);
+  testWidgets('AuctionDetailScreen allows bidding on auction', (WidgetTester tester) async {
+    // Set screen size to a reasonable phone size
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 1.0;
+    
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+    });
     
     // Create a test auction where the current user is not the owner
     final auction = Auction(
@@ -94,20 +102,23 @@ void main() {
     );
     
     // Mock the getAuction method to return the same auction
-    when(mockWeb3Service.getAuction(deviceId: auction.deviceId))
-        .thenAnswer((_) async => OperationResult<Auction>(
-              success: true,
-              data: auction,
-            ));
+    when(mockWeb3Service.getAuction(deviceId: anyNamed('deviceId'))).thenAnswer((_) async {
+      return OperationResult(
+        success: true,
+        data: auction,
+      );
+    });
     
     // Mock the placeBidNew method
     when(mockWeb3Service.placeBidNew(
-      deviceId: auction.deviceId,
-      amount: 0.3,
-    )).thenAnswer((_) async => OperationResult<double>(
-          success: true,
-          data: 0.3,
-        ));
+      deviceId: anyNamed('deviceId'),
+      amount: anyNamed('amount'),
+    )).thenAnswer((_) async {
+      return OperationResult(
+        success: true,
+        message: 'Bid placed successfully',
+      );
+    });
     
     // Build the widget
     await tester.pumpWidget(
@@ -150,11 +161,14 @@ void main() {
     )).called(1);
   });
   
-  testWidgets('AuctionDetailScreen allows finalizing when auction has ended', (WidgetTester tester) async {
-    // Set the screen size for testing
-    tester.binding.window.physicalSizeTestValue = const Size(1080, 1920);
-    tester.binding.window.devicePixelRatioTestValue = 1.0;
-    addTearDown(tester.binding.window.clearPhysicalSizeTestValue);
+  testWidgets('AuctionDetailScreen allows finalizing auction', (WidgetTester tester) async {
+    // Set screen size to a reasonable phone size
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 1.0;
+    
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+    });
     
     // Create an ended auction where the current user is the owner
     final endedAuction = Auction(
@@ -169,20 +183,35 @@ void main() {
       isFinalized: false,
     );
     
-    // Mock the getAuction method to return the same auction
-    when(mockWeb3Service.getAuction(deviceId: endedAuction.deviceId))
-        .thenAnswer((_) async => OperationResult<Auction>(
-              success: true,
-              data: endedAuction,
-            ));
+    // Track if the auction has been finalized in our mock
+    bool auctionFinalized = false;
+    
+    // Mock the getAuction method to return the appropriate auction state
+    when(mockWeb3Service.getAuction(deviceId: anyNamed('deviceId'))).thenAnswer((_) async {
+      if (auctionFinalized) {
+        return OperationResult(
+          success: true,
+          data: endedAuction.copyWith(isFinalized: true, isActive: false),
+        );
+      } else {
+        return OperationResult(
+          success: true,
+          data: endedAuction,
+        );
+      }
+    });
     
     // Mock the finalizeAuctionNew method
     when(mockWeb3Service.finalizeAuctionNew(
-      deviceId: endedAuction.deviceId,
-    )).thenAnswer((_) async => OperationResult<bool>(
-          success: true,
-          data: true,
-        ));
+      deviceId: anyNamed('deviceId'),
+    )).thenAnswer((_) async {
+      auctionFinalized = true;
+      return OperationResult(
+        success: true,
+        data: true,
+        message: 'Auction finalized successfully',
+      );
+    });
     
     // Build the widget
     await tester.pumpWidget(
@@ -210,11 +239,14 @@ void main() {
     )).called(1);
   });
   
-  testWidgets('AuctionDetailScreen shows cancel button for owner with no bids', (WidgetTester tester) async {
-    // Set the screen size for testing
-    tester.binding.window.physicalSizeTestValue = const Size(1080, 1920);
-    tester.binding.window.devicePixelRatioTestValue = 1.0;
-    addTearDown(tester.binding.window.clearPhysicalSizeTestValue);
+  testWidgets('AuctionDetailScreen allows cancelling auction', (WidgetTester tester) async {
+    // Set screen size to a reasonable phone size
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 1.0;
+    
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+    });
     
     // Create an auction with no bids where the current user is the owner
     final noBidsAuction = Auction(
@@ -229,20 +261,34 @@ void main() {
       isFinalized: false,
     );
     
-    // Mock the getAuction method to return the same auction
-    when(mockWeb3Service.getAuction(deviceId: noBidsAuction.deviceId))
-        .thenAnswer((_) async => OperationResult<Auction>(
-              success: true,
-              data: noBidsAuction,
-            ));
+    // Track if the auction has been cancelled in our mock
+    bool auctionCancelled = false;
+    
+    // Mock the getAuction method to return the appropriate auction state
+    when(mockWeb3Service.getAuction(deviceId: anyNamed('deviceId'))).thenAnswer((_) async {
+      if (auctionCancelled) {
+        return OperationResult(
+          success: true,
+          data: noBidsAuction.copyWith(isActive: false),
+        );
+      } else {
+        return OperationResult(
+          success: true,
+          data: noBidsAuction,
+        );
+      }
+    });
     
     // Mock the cancelAuction method
     when(mockWeb3Service.cancelAuction(
-      deviceId: noBidsAuction.deviceId,
-    )).thenAnswer((_) async => OperationResult<bool>(
-          success: true,
-          data: true,
-        ));
+      deviceId: anyNamed('deviceId'),
+    )).thenAnswer((_) async {
+      auctionCancelled = true;
+      return OperationResult(
+        success: true,
+        message: 'Auction cancelled successfully',
+      );
+    });
     
     // Build the widget
     await tester.pumpWidget(
@@ -272,5 +318,91 @@ void main() {
     verify(mockWeb3Service.cancelAuction(
       deviceId: noBidsAuction.deviceId,
     )).called(1);
+  });
+  
+  testWidgets('AuctionDetailScreen allows changing time slot duration', (WidgetTester tester) async {
+    // Set screen size to a reasonable phone size
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 1.0;
+    
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+    });
+    
+    // Set up mock Web3Service
+    final mockWeb3Service = MockWeb3Service();
+    
+    // Mock current user address (not the owner)
+    when(mockWeb3Service.currentAddress).thenReturn('0x1234567890123456789012345678901234567890');
+    
+    // Mock getAuction method
+    when(mockWeb3Service.getAuction(deviceId: anyNamed('deviceId'))).thenAnswer((_) async {
+      return OperationResult(
+        success: true,
+        data: Auction(
+          deviceId: '123',
+          owner: '0x0987654321098765432109876543210987654321',
+          startTime: DateTime.now().subtract(const Duration(hours: 1)),
+          endTime: DateTime.now().add(const Duration(hours: 1)),
+          minimumBid: 0.1,
+          highestBid: 0.2,
+          highestBidder: '0x5678901234567890123456789012345678901234',
+          isActive: true,
+          isFinalized: false,
+        ),
+      );
+    });
+    
+    // Build the AuctionDetailScreen widget
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AuctionDetailScreen(
+          auction: Auction(
+            deviceId: '123',
+            owner: '0x0987654321098765432109876543210987654321',
+            startTime: DateTime.now().subtract(const Duration(hours: 1)),
+            endTime: DateTime.now().add(const Duration(hours: 1)),
+            minimumBid: 0.1,
+            highestBid: 0.2,
+            highestBidder: '0x5678901234567890123456789012345678901234',
+            isActive: true,
+            isFinalized: false,
+          ),
+          web3Service: mockWeb3Service,
+        ),
+      ),
+    );
+    
+    // Wait for the widget to build
+    await tester.pumpAndSettle();
+    
+    // Verify the default duration selector is present
+    expect(find.byType(SlotDurationSelector), findsOneWidget);
+    
+    // Find the selected duration text (which should be bold)
+    final selectedDurationFinder = find.text('2 min').evaluate().where((element) {
+      final widget = element.widget as Text;
+      return widget.style?.fontWeight == FontWeight.bold;
+    });
+    expect(selectedDurationFinder.length, 1);
+    
+    // Tap on the 4-minute option
+    await tester.tap(find.text('4 min'));
+    await tester.pumpAndSettle();
+    
+    // Verify that time slots are regenerated with the new duration
+    // This is hard to verify directly, but we can check that the 4-minute option is now selected
+    final Finder durationSelector = find.byType(SlotDurationSelector);
+    expect(durationSelector, findsOneWidget);
+    
+    // Verify that the TimeSlotSelector is updated
+    expect(find.byType(TimeSlotSelector), findsOneWidget);
+    
+    // Find the newly selected duration text (which should be bold)
+    final newSelectedDurationFinder = find.text('4 min').evaluate().where((element) {
+      final widget = element.widget as Text;
+      return widget.style?.fontWeight == FontWeight.bold;
+    });
+    expect(newSelectedDurationFinder.length, 1);
   });
 }

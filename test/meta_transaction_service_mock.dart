@@ -49,7 +49,7 @@ class MockMetaTransactionService extends MetaTransactionService {
       await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
     }
     
-    if (simulateFailures && Random().nextDouble() < 0.2) {
+    if (simulateFailures && Random().nextDouble() < 0.8) {
       throw Exception('Simulated relayer failure');
     }
     

@@ -3,6 +3,7 @@ import '../models/auction.dart';
 import '../models/device_control_slot.dart';
 import '../services/web3_service.dart';
 import '../widgets/time_slot_selector.dart';
+import '../widgets/slot_duration_selector.dart';
 import 'dart:async';
 
 class AuctionDetailScreen extends StatefulWidget {
@@ -30,6 +31,7 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
   DeviceControlSlot? _selectedTimeSlot;
   List<DeviceControlSlot> _controlSlots = [];
   Timer? _refreshTimer;
+  int _slotDurationMinutes = 2; // Default to 2 minutes
 
   @override
   void initState() {
@@ -53,10 +55,10 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
     // In a real implementation, these would come from the auction data
     final List<DeviceControlSlot> slots = [];
     
-    // Create slots in 30-minute increments within the auction time range
+    // Create slots with the selected duration within the auction time range
     DateTime slotStart = _auction.startTime;
     while (slotStart.isBefore(_auction.endTime)) {
-      final slotEnd = slotStart.add(const Duration(minutes: 30));
+      final slotEnd = slotStart.add(Duration(minutes: _slotDurationMinutes));
       if (slotEnd.isAfter(_auction.endTime)) {
         break;
       }
@@ -72,7 +74,15 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
     
     setState(() {
       _controlSlots = slots;
+      _selectedTimeSlot = null; // Reset selected slot when regenerating
     });
+  }
+
+  void _onDurationSelected(int duration) {
+    setState(() {
+      _slotDurationMinutes = duration;
+    });
+    _generateControlSlots(); // Regenerate slots with the new duration
   }
 
   Future<void> _refreshAuctionData() async {
@@ -394,6 +404,15 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
                       });
                     },
                     selectedSlot: _selectedTimeSlot,
+                  ),
+                
+                const SizedBox(height: 24),
+                
+                // Slot duration selector
+                if (canBid)
+                  SlotDurationSelector(
+                    onDurationSelected: _onDurationSelected,
+                    selectedDuration: _slotDurationMinutes,
                   ),
                 
                 const SizedBox(height: 24),
