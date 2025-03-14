@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../models/auction.dart';
 import '../models/device_control_slot.dart';
 import '../models/auction_status.dart';
+import '../models/operation_result.dart';
 import '../services/web3_service.dart';
+import '../services/multi_slot_auction_service.dart';
 import '../widgets/time_slot_selector.dart';
 import '../widgets/slot_duration_selector.dart';
 import 'dart:async';
@@ -151,6 +153,7 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
       return;
     }
     
+    // For non-mock mode, we require a time slot selection
     if (_selectedTimeSlot == null && !widget.web3Service.isMockMode) {
       setState(() {
         _statusMessage = 'Please select a time slot';
@@ -166,10 +169,26 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
     });
     
     try {
-      final result = await widget.web3Service.placeBidNew(
-        deviceId: _auction.deviceId,
-        amount: bidAmount
-      );
+      OperationResult<dynamic> result;
+      
+      // If a time slot is selected, we'll use the slot's start time for bidding
+      // Otherwise, we'll use the auction's device ID directly
+      if (_selectedTimeSlot != null) {
+        // Create the multi-slot service
+        final multiSlotService = MultiSlotAuctionService(widget.web3Service);
+        
+        result = await multiSlotService.placeBidOnSlot(
+          deviceId: _auction.deviceId.split('-slot-').first, // Extract base device ID
+          slotStartTime: _selectedTimeSlot!.startTime,
+          amount: bidAmount
+        );
+      } else {
+        // Use regular bidding for the entire auction period
+        result = await widget.web3Service.placeBidNew(
+          deviceId: _auction.deviceId,
+          amount: bidAmount
+        );
+      }
       
       if (result.success) {
         // Refresh auction data after placing bid
@@ -201,7 +220,6 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
     }
   }
 
-  // Method to place a mock bid with a random amount
   Future<void> _placeMockBid() async {
     setState(() {
       _isLoading = true;

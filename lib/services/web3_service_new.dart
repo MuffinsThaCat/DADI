@@ -87,28 +87,12 @@ class Web3Service extends ChangeNotifier implements Web3ServiceInterface {
     // Clear any existing auctions to start fresh
     _auctions.clear();
     
-    // Initialize with default mock auctions
+    // Initialize mock data (which now doesn't create any default auctions)
     _initializeMockData();
     
-    // Create an additional mock auction with current timestamp
-    final now = DateTime.now();
-    final deviceId = 'mock-device-${now.millisecondsSinceEpoch}';
-    _log('Creating additional mock auction with ID: $deviceId');
-    
-    _auctions[deviceId] = Auction(
-      deviceId: deviceId,
-      owner: '0xMockOwner${now.millisecondsSinceEpoch}',
-      startTime: now,
-      endTime: now.add(const Duration(hours: 2)),
-      minimumBid: 0.1,
-      highestBid: 0.0,
-      highestBidder: '0x0000000000000000000000000000000000000000',
-      isActive: true,
-      isFinalized: false,
-    );
-    
+    // No longer creating an additional mock auction
     _log('Mock mode forced enabled, active auctions: ${_auctions.length}');
-    _log('Active auction keys: ${_auctions.keys.join(', ')}');
+    _log('Starting with clean slate - no default auctions');
     
     // Make sure to notify listeners
     notifyListeners();
@@ -118,35 +102,7 @@ class Web3Service extends ChangeNotifier implements Web3ServiceInterface {
   void _initializeMockData() {
     _log('Initializing mock data in Web3Service');
     
-    // Create a few mock auctions
-    final now = DateTime.now();
-    
-    // Mock auction 1 - active
-    _auctions['mock-device-1'] = Auction(
-      deviceId: 'mock-device-1',
-      owner: '0xMockOwner1',
-      startTime: now.subtract(const Duration(hours: 1)),
-      endTime: now.add(const Duration(hours: 5)),
-      minimumBid: 0.1,
-      highestBid: 0.2,
-      highestBidder: '0xMockBidder1',
-      isActive: true,
-      isFinalized: false,
-    );
-    
-    // Mock auction 2 - ending soon
-    _auctions['mock-device-2'] = Auction(
-      deviceId: 'mock-device-2',
-      owner: '0xMockOwner2',
-      startTime: now.subtract(const Duration(hours: 23)),
-      endTime: now.add(const Duration(minutes: 30)),
-      minimumBid: 0.05,
-      highestBid: 0.15,
-      highestBidder: '0xMockBidder2',
-      isActive: true,
-      isFinalized: false,
-    );
-    
-    _log('Created ${_auctions.length} mock auctions');
+    // No longer creating default mock auctions - users will create their own
+    _log('Not creating default mock auctions - clean slate for user-created auctions');
   }
 }

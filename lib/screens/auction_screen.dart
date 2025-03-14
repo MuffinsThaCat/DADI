@@ -1,25 +1,29 @@
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'package:flutter/material.dart';
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/web3_service.dart';
-import '../services/mock_buttplug_service.dart';
+
 import '../models/auction.dart';
 import '../providers/mock_auction_provider.dart';
 import '../providers/meta_transaction_provider.dart';
-import 'device_control_screen.dart';
-import '../widgets/wavy_background.dart'; // Import wavy background
-import '../widgets/transaction_status_widget.dart';
+import '../services/web3_service.dart';
+import '../services/mock_buttplug_service.dart';
+import '../widgets/wavy_background.dart';
 
 class AuctionScreen extends StatefulWidget {
   final int initialTab;
   final String? deviceId;
-  
+  final bool showOnlySpecificDevice;
+  final List<MapEntry<String, Map<String, dynamic>>>? preFilteredSessions;
+
   const AuctionScreen({
     super.key,
     this.initialTab = 0,
     this.deviceId,
+    this.showOnlySpecificDevice = false,
+    this.preFilteredSessions,
   });
 
   @override
@@ -27,44 +31,47 @@ class AuctionScreen extends StatefulWidget {
 }
 
 class _AuctionScreenState extends State<AuctionScreen> {
-  final _formKey = GlobalKey<FormState>();
-  DateTime _startDate = DateTime.now();
-  DateTime _endDate = DateTime.now().add(const Duration(hours: 24));
+  List<Auction> _auctions = [];
   bool _isLoading = false;
   String? _errorMessage;
-  final TextEditingController _startDateController = TextEditingController();
-  final TextEditingController _endDateController = TextEditingController();
-  final TextEditingController _minBidController = TextEditingController();
-  final TextEditingController _totalTimePeriodController = TextEditingController();
-  List<MetaTransaction> _pendingTransactions = [];
+  String _loadingMessage = 'Loading...';
+  final _auctionsScrollController = ScrollController();
+  final _formKey = GlobalKey<FormState>();
+
+  // Auction creation form fields
+  TextEditingController _deviceIdController = TextEditingController();
+  TextEditingController _startTimeController = TextEditingController();
+  TextEditingController _durationController = TextEditingController();
+  TextEditingController _minimumBidController = TextEditingController();
+  TextEditingController _numSlotsController = TextEditingController();
+  TextEditingController _slotDurationController = TextEditingController();
+
+  DateTime _selectedStartTime = DateTime.now().add(const Duration(minutes: 5));
+  List<Map<String, dynamic>> _pendingTransactions = [];
   final Set<String> _shownCompletionNotifications = {};
-  // Add a scroll controller for the auctions list
-  final ScrollController _auctionsScrollController = ScrollController();
 
-  /// Log a message with the AuctionScreen prefix
-  void _log(String message) {
-    developer.log('AuctionScreen: $message');
-  }
-
+  // Initialize controllers and fetch auctions
   @override
   void initState() {
     super.initState();
     _log('AuctionScreen initState');
-    
+
     // Check if we're in mock mode and force create auctions if needed
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAndCreateMockAuctions();
     });
-    
-    _startDateController.text = _formatDateTime(_startDate);
-    _endDateController.text = _formatDateTime(_endDate);
-    _minBidController.text = '0.01';
-    _totalTimePeriodController.text = '24';
-    
+
+    _deviceIdController.text = 'device-${DateTime.now().millisecondsSinceEpoch}';
+    _startTimeController.text = _formatDateTime(_selectedStartTime);
+    _durationController.text = '60';
+    _minimumBidController.text = '0.01';
+    _numSlotsController.text = '6';
+    _slotDurationController.text = '5';
+
     // Delay to ensure provider is initialized
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updatePendingTransactions();
-      
+
       // If a specific deviceId is provided, scroll to it after the auctions are loaded
       if (widget.deviceId != null) {
         _scrollToHighlightedAuction();
@@ -77,33 +84,30 @@ class _AuctionScreenState extends State<AuctionScreen> {
     setState(() {
       // Only track transactions that are still in progress
       _pendingTransactions = metaTxProvider.transactions
-          .where((tx) => tx.status == MetaTransactionStatus.submitted || 
-                         tx.status == MetaTransactionStatus.processing)
+          .where((tx) => tx.status == MetaTransactionStatus.submitted || tx.status == MetaTransactionStatus.processing)
+          .map((tx) => {'id': tx.id, 'status': tx.status})
           .toList();
     });
-    
+
     // If there are any newly confirmed or failed transactions, show a brief toast
     final recentlyCompleted = metaTxProvider.transactions
-        .where((tx) => (tx.status == MetaTransactionStatus.confirmed || 
-                       tx.status == MetaTransactionStatus.failed) &&
-                       DateTime.now().difference(tx.timestamp).inMinutes < 2)
+        .where((tx) => (tx.status == MetaTransactionStatus.confirmed || tx.status == MetaTransactionStatus.failed) &&
+            DateTime.now().difference(tx.timestamp).inMinutes < 2)
         .toList();
-        
+
     for (final tx in recentlyCompleted) {
       if (!_shownCompletionNotifications.contains(tx.id)) {
         _shownCompletionNotifications.add(tx.id);
-        
+
         // Show a brief toast for the completed transaction
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               tx.status == MetaTransactionStatus.confirmed
-                ? 'Transaction completed: ${tx.description}'
-                : 'Transaction failed: ${tx.description}',
+                  ? 'Transaction completed: ${tx.description}'
+                  : 'Transaction failed: ${tx.description}',
             ),
-            backgroundColor: tx.status == MetaTransactionStatus.confirmed
-                ? Colors.green
-                : Colors.red,
+            backgroundColor: tx.status == MetaTransactionStatus.confirmed ? Colors.green : Colors.red,
             duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
             margin: const EdgeInsets.all(8),
@@ -119,21 +123,21 @@ class _AuctionScreenState extends State<AuctionScreen> {
   // Method to scroll to the highlighted auction
   void _scrollToHighlightedAuction() {
     if (widget.deviceId == null) return;
-    
+
     // Delay to ensure the list is built
     Future.delayed(const Duration(milliseconds: 500), () {
       final web3 = Provider.of<Web3Service>(context, listen: false);
       final auctions = web3.activeAuctions;
-      
+
       // Find the index of the auction with the matching deviceId
       final auctionsList = auctions.keys.toList();
       final index = auctionsList.indexOf(widget.deviceId!);
-      
+
       if (index != -1 && _auctionsScrollController.hasClients) {
         // Calculate the position to scroll to
         final itemHeight = 200.0; // Approximate height of each auction card
         final offset = index * itemHeight;
-        
+
         // Scroll to the position
         _auctionsScrollController.animateTo(
           offset,
@@ -145,24 +149,24 @@ class _AuctionScreenState extends State<AuctionScreen> {
   }
 
   /// Check if we're in mock mode and create mock auctions if needed
-  void _checkAndCreateMockAuctions() async {
+  void _checkAndCreateMockAuctions() {
     // Use Future.microtask to avoid calling setState during build
     Future.microtask(() async {
       final web3Service = context.read<Web3Service>();
-      
+
       if (web3Service.isMockMode) {
         _log('Mock mode detected, ensuring mock auctions exist');
-        
+
         // Get current auctions
         final result = await web3Service.getActiveAuctions();
-        
+
         if (!result.success || (result.data?.isEmpty ?? true)) {
           _log('No active auctions found in mock mode, forcing mock auctions creation');
           await web3Service.forceEnableMockMode();
-          
+
           // Refresh the UI
           if (mounted) {
-            _refreshAuctions();
+            _refreshData();
           }
         } else {
           _log('Mock auctions already exist: ${result.data?.length ?? 0}');
@@ -173,11 +177,13 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
   @override
   void dispose() {
-    _startDateController.dispose();
-    _endDateController.dispose();
-    _minBidController.dispose();
-    _totalTimePeriodController.dispose();
-    _auctionsScrollController.dispose(); // Dispose the scroll controller
+    _deviceIdController.dispose();
+    _startTimeController.dispose();
+    _durationController.dispose();
+    _minimumBidController.dispose();
+    _numSlotsController.dispose();
+    _slotDurationController.dispose();
+    _auctionsScrollController.dispose();
     super.dispose();
   }
 
@@ -186,14 +192,10 @@ class _AuctionScreenState extends State<AuctionScreen> {
     final web3 = Provider.of<Web3Service>(context);
     final buttplug = Provider.of<MockButtplugService>(context);
     final metaTxProvider = Provider.of<MetaTransactionProvider>(context);
-    final theme = Theme.of(context);
-    final isConnected = web3.isConnected;
-    final isMockMode = web3.isMockMode;
 
     // Update pending transactions when provider changes
     if (_pendingTransactions.length != metaTxProvider.transactions
-        .where((tx) => tx.status == MetaTransactionStatus.submitted || 
-                       tx.status == MetaTransactionStatus.processing)
+        .where((tx) => tx.status == MetaTransactionStatus.submitted || tx.status == MetaTransactionStatus.processing)
         .length) {
       _updatePendingTransactions();
     }
@@ -208,22 +210,22 @@ class _AuctionScreenState extends State<AuctionScreen> {
           actions: [
             // Network status indicator
             Tooltip(
-              message: isMockMode 
-                  ? 'Running in mock mode (no blockchain)' 
-                  : isConnected 
-                      ? 'Connected to blockchain' 
+              message: web3.isMockMode
+                  ? 'Running in mock mode (no blockchain)'
+                  : web3.isConnected
+                      ? 'Connected to blockchain'
                       : 'Not connected to blockchain',
               child: IconButton(
                 icon: Icon(
-                  isMockMode 
-                      ? Icons.cloud_off 
-                      : isConnected 
-                          ? Icons.cloud_done 
+                  web3.isMockMode
+                      ? Icons.cloud_off
+                      : web3.isConnected
+                          ? Icons.cloud_done
                           : Icons.cloud_off,
-                  color: isMockMode 
-                      ? Colors.orange 
-                      : isConnected 
-                          ? Colors.green 
+                  color: web3.isMockMode
+                      ? Colors.orange
+                      : web3.isConnected
+                          ? Colors.green
                           : Colors.red,
                 ),
                 onPressed: _showNetworkStatus,
@@ -231,7 +233,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
             ),
             IconButton(
               icon: const Icon(Icons.refresh),
-              onPressed: _refreshAuctions,
+              onPressed: _refreshData,
               tooltip: 'Refresh auctions',
             ),
           ],
@@ -242,15 +244,48 @@ class _AuctionScreenState extends State<AuctionScreen> {
             ],
           ),
         ),
-        body: WavyBackground(
-          primaryColor: theme.colorScheme.primary,
-          secondaryColor: theme.colorScheme.secondary,
-          child: TabBarView(
-            children: [
-              _buildCreateAuctionTab(web3, buttplug),
-              _buildActiveAuctionsTab(),
-            ],
-          ),
+        body: Stack(
+          children: [
+            // Background with gradient waves
+            const WavyBackground(
+              primaryColor: Colors.blue,
+              secondaryColor: Colors.purple,
+              child: SizedBox.expand(),
+            ),
+
+            // Main content
+            TabBarView(
+              children: [
+                _buildCreateAuctionTab(web3, buttplug),
+                _buildActiveAuctionsTab(),
+              ],
+            ),
+
+            // Loading overlay
+            if (_isLoading)
+              Container(
+                color: Colors.black.withOpacity(0.5),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _loadingMessage,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -284,14 +319,14 @@ class _AuctionScreenState extends State<AuctionScreen> {
             ),
             const SizedBox(height: 16),
             TextFormField(
-              controller: _startDateController,
+              controller: _startTimeController,
               decoration: const InputDecoration(
-                labelText: 'Start Date',
+                labelText: 'Start Time',
                 hintText: 'YYYY-MM-DD HH:MM',
               ),
               validator: (value) {
                 if (value == null || value.isEmpty) {
-                  return 'Please enter a start date';
+                  return 'Please enter a start time';
                 }
                 try {
                   DateTime.parse(value);
@@ -302,9 +337,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
               },
               onChanged: (value) {
                 try {
-                  _startDate = DateTime.parse(value);
-                  // Update end date based on total time period
-                  _updateEndDate();
+                  _selectedStartTime = DateTime.parse(value);
                 } catch (e) {
                   // Invalid date format, ignore
                 }
@@ -312,58 +345,21 @@ class _AuctionScreenState extends State<AuctionScreen> {
             ),
             const SizedBox(height: 16),
             TextFormField(
-              controller: _endDateController,
+              controller: _durationController,
               decoration: const InputDecoration(
-                labelText: 'End Date (calculated)',
-                hintText: 'Based on start date and total time',
-              ),
-              readOnly: true, // Make it read-only
-              enabled: false, // Disable the field
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter an end date';
-                }
-                try {
-                  final endDate = DateTime.parse(value);
-                  if (endDate.isBefore(_startDate)) {
-                    return 'End date must be after start date';
-                  }
-                  return null;
-                } catch (e) {
-                  return 'Invalid date format';
-                }
-              },
-              onChanged: (value) {
-                try {
-                  _endDate = DateTime.parse(value);
-                } catch (e) {
-                  // Invalid date format, ignore
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _totalTimePeriodController,
-              decoration: const InputDecoration(
-                labelText: 'Total Time Period (hours)',
-                hintText: 'Enter total hours for device usage',
+                labelText: 'Duration (minutes)',
                 border: OutlineInputBorder(),
               ),
               keyboardType: TextInputType.number,
               validator: (value) {
                 if (value == null || value.isEmpty) {
-                  return 'Please enter total time period';
+                  return 'Please enter duration';
                 }
-                final hours = int.tryParse(value);
-                if (hours == null || hours <= 0) {
+                final minutes = int.tryParse(value);
+                if (minutes == null || minutes <= 0) {
                   return 'Please enter a valid positive number';
                 }
                 return null;
-              },
-              onChanged: (value) {
-                if (value.isNotEmpty && int.tryParse(value) != null) {
-                  _updateEndDate();
-                }
               },
             ),
             const SizedBox(height: 16),
@@ -372,7 +368,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
                 labelText: 'Minimum Bid (ETH)',
                 border: OutlineInputBorder(),
               ),
-              controller: _minBidController,
+              controller: _minimumBidController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               validator: (value) {
                 if (value == null || value.isEmpty) {
@@ -400,7 +396,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
                           if (!web3.isConnected) {
                             throw Exception('Wallet not connected. Please connect your wallet first.');
                           }
-                          
+
                           // Check if contract is initialized
                           if (!web3.isContractInitialized) {
                             await web3.initializeContract();
@@ -408,7 +404,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
                               throw Exception('Failed to initialize contract. Please try again.');
                             }
                           }
-                          
+
                           // Validate contract with a test call
                           bool isValid = await web3.testContract();
                           if (!isValid) {
@@ -419,24 +415,23 @@ class _AuctionScreenState extends State<AuctionScreen> {
                             }
                             return;
                           }
-                          
-                          final deviceId = buttplug.currentDevice;
-                          if (deviceId == null) {
+
+                          final deviceId = _deviceIdController.text;
+                          if (deviceId.isEmpty) {
                             // Use a mock device ID if no device is selected
                             final mockDeviceId = 'mock_device_${DateTime.now().millisecondsSinceEpoch}';
                             _log('No device selected, using mock device ID: $mockDeviceId');
-                            
+
                             // Convert form values to appropriate types
-                            final minBidEth = double.parse(_minBidController.text);
-                            final totalTimePeriod = int.parse(_totalTimePeriodController.text);
-                            
+                            final minBidEth = double.parse(_minimumBidController.text);
+                            final duration = int.parse(_durationController.text);
+
                             _log('Creating auction with params:');
                             _log('Device ID: $mockDeviceId');
-                            _log('Start Date: $_startDate');
-                            _log('End Date: $_endDate');
+                            _log('Start Time: $_selectedStartTime');
+                            _log('Duration: $duration minutes');
                             _log('Min Bid: $minBidEth ETH');
-                            _log('Total Time Period: $totalTimePeriod hours');
-                            
+
                             // Call the contract method with mock device ID
                             try {
                               if (kIsWeb) {
@@ -446,11 +441,11 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                   _log('Using MockAuctionProvider for web to create auction');
                                   final success = await mockAuctionProvider.createAuction(
                                     deviceId: mockDeviceId,
-                                    startTime: _startDate,
-                                    duration: Duration(hours: totalTimePeriod),
+                                    startTime: _selectedStartTime,
+                                    duration: Duration(minutes: duration),
                                     minimumBid: minBidEth,
                                   );
-                                  
+
                                   if (mounted) {
                                     if (success) {
                                       ScaffoldMessenger.of(context).showSnackBar(
@@ -472,8 +467,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                   // Fall back to Web3Service
                                   await web3.createAuction(
                                     deviceId: mockDeviceId,
-                                    startTime: _startDate,
-                                    duration: Duration(hours: totalTimePeriod),
+                                    startTime: _selectedStartTime,
+                                    duration: Duration(minutes: duration),
                                     minimumBid: minBidEth,
                                   );
                                 }
@@ -481,12 +476,12 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                 // Use Web3Service for non-web platforms
                                 await web3.createAuction(
                                   deviceId: mockDeviceId,
-                                  startTime: _startDate,
-                                  duration: Duration(hours: totalTimePeriod),
+                                  startTime: _selectedStartTime,
+                                  duration: Duration(minutes: duration),
                                   minimumBid: minBidEth,
                                 );
                               }
-                              
+
                               if (mounted && !kIsWeb) {
                                 // Check if we've switched to mock mode during the process
                                 if (web3.isMockMode) {
@@ -512,16 +507,15 @@ class _AuctionScreenState extends State<AuctionScreen> {
                           } else {
                             // Original code for when a device is selected
                             // Convert form values to appropriate types
-                            final minBidEth = double.parse(_minBidController.text);
-                            final totalTimePeriod = int.parse(_totalTimePeriodController.text);
-                            
+                            final minBidEth = double.parse(_minimumBidController.text);
+                            final duration = int.parse(_durationController.text);
+
                             _log('Creating auction with params:');
                             _log('Device ID: $deviceId');
-                            _log('Start Date: $_startDate');
-                            _log('End Date: $_endDate');
+                            _log('Start Time: $_selectedStartTime');
+                            _log('Duration: $duration minutes');
                             _log('Min Bid: $minBidEth ETH');
-                            _log('Total Time Period: $totalTimePeriod hours');
-                            
+
                             // Call the contract method
                             try {
                               if (kIsWeb) {
@@ -531,11 +525,11 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                   _log('Using MockAuctionProvider for web to create auction with real device');
                                   final success = await mockAuctionProvider.createAuction(
                                     deviceId: deviceId,
-                                    startTime: _startDate,
-                                    duration: Duration(hours: totalTimePeriod),
+                                    startTime: _selectedStartTime,
+                                    duration: Duration(minutes: duration),
                                     minimumBid: minBidEth,
                                   );
-                                  
+
                                   if (mounted) {
                                     if (success) {
                                       ScaffoldMessenger.of(context).showSnackBar(
@@ -557,8 +551,8 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                   // Fall back to Web3Service
                                   await web3.createAuction(
                                     deviceId: deviceId,
-                                    startTime: _startDate,
-                                    duration: Duration(hours: totalTimePeriod),
+                                    startTime: _selectedStartTime,
+                                    duration: Duration(minutes: duration),
                                     minimumBid: minBidEth,
                                   );
                                 }
@@ -566,12 +560,12 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                 // Use Web3Service for non-web platforms
                                 await web3.createAuction(
                                   deviceId: deviceId,
-                                  startTime: _startDate,
-                                  duration: Duration(hours: totalTimePeriod),
+                                  startTime: _selectedStartTime,
+                                  duration: Duration(minutes: duration),
                                   minimumBid: minBidEth,
                                 );
                               }
-                              
+
                               if (mounted && !kIsWeb) {
                                 // Check if we've switched to mock mode during the process
                                 if (web3.isMockMode) {
@@ -614,383 +608,551 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
   Widget _buildActiveAuctionsTab() {
     final web3Service = context.watch<Web3Service>();
+
+    // If we should only show a specific device and have pre-filtered sessions
+    if (widget.showOnlySpecificDevice && widget.preFilteredSessions != null) {
+      _log('Showing only pre-filtered sessions for device: ${widget.deviceId}');
+
+      for (var entry in widget.preFilteredSessions!) {
+        _log('Pre-filtered session: ${entry.key}');
+      }
+
+      if (widget.preFilteredSessions!.isEmpty) {
+        return const Center(
+          child: Text('No auction sessions found for this device'),
+        );
+      }
+      
+      // Convert the MapEntry list to Auction objects
+      final List<Auction> auctionSessions = widget.preFilteredSessions!.map((entry) {
+        _log('Converting session: ${entry.key}');
+
+        // If it's already an Auction, use it directly
+        if (entry.value is Auction) {
+          _log('Entry is already an Auction object');
+          return entry.value as Auction;
+        }
+
+        // Otherwise, create an Auction from the Map
+        _log('Creating Auction from Map for device: ${entry.key}');
+
+        try {
+          final data = Map<String, dynamic>.from(entry.value);
+          data['deviceId'] = entry.key; // Ensure deviceId is set from the map entry key
+          return Auction.fromBlockchainData(data);
+        } catch (e) {
+          _log('Error converting session to Auction: $e');
+          return Auction(
+            deviceId: entry.key,
+            startTime: DateTime.now(),
+            endTime: DateTime.now().add(const Duration(hours: 1)),
+            owner: 'unknown',
+            minimumBid: 0.01,
+            isActive: true,
+            isFinalized: false,
+          );
+        }
+      }).toList();
+
+      _log('Converted ${auctionSessions.length} auction sessions');
+
+      // Check if we have any sessions
+      if (auctionSessions.isEmpty) {
+        return const Center(
+          child: Text('No auction sessions available'),
+        );
+      }
+
+      // Group the sessions by base device ID
+      final groupedSessions = _groupAuctionsByBaseDevice(auctionSessions);
+      _log('Grouped sessions by base device ID: ${groupedSessions.keys.join(', ')}');
+
+      // Try to find the exact device ID first
+      if (widget.deviceId != null && groupedSessions.containsKey(widget.deviceId)) {
+        _log('Found exact match for device ID: ${widget.deviceId}');
+        final slots = groupedSessions[widget.deviceId]!;
+
+        return SingleChildScrollView(
+          child: Column(
+            children: [
+              Text('Found ${slots.length} auction slots for device ${widget.deviceId}'),
+              _buildDeviceWithMultiSlotsCard(widget.deviceId!, slots, web3Service),
+            ],
+          ),
+        );
+      }
+
+      // Look for sessions that might start with the base device ID
+      final String? baseDeviceId = widget.deviceId?.split('-session-').first;
+      _log('Looking for base device ID: $baseDeviceId');
+
+      if (baseDeviceId != null) {
+        // Find any key that matches the base device ID pattern
+        final matchingKey = groupedSessions.keys.firstWhere(
+          (key) => key.startsWith(baseDeviceId) || key.contains(baseDeviceId),
+          orElse: () => '',
+        );
+
+        if (matchingKey.isNotEmpty) {
+          _log('Found matching key for base device ID: $matchingKey');
+          final slots = groupedSessions[matchingKey]!;
+
+          return SingleChildScrollView(
+            child: Column(
+              children: [
+                Text('Found ${slots.length} auction slots for device $matchingKey'),
+                _buildDeviceWithMultiSlotsCard(matchingKey, slots, web3Service),
+              ],
+            ),
+          );
+        }
+      }
+
+      // If we have any auctions at all, just show the first group
+      if (groupedSessions.isNotEmpty) {
+        _log('No exact match found, showing first group of sessions');
+        final firstDeviceId = groupedSessions.keys.first;
+        final slots = groupedSessions[firstDeviceId]!;
+
+        return SingleChildScrollView(
+          child: Column(
+            children: [
+              Text('Showing ${slots.length} auction slots for device $firstDeviceId'),
+              _buildDeviceWithMultiSlotsCard(firstDeviceId, slots, web3Service),
+            ],
+          ),
+        );
+      }
+
+      // Fallback if no sessions are found
+      return Center(
+        child: Text('No sessions found for device: ${widget.deviceId}'),
+      );
+    }
     
     // In web mode, use the MockAuctionProvider if available
     if (kIsWeb) {
       final mockAuctionProvider = context.watch<MockAuctionProvider?>();
       if (mockAuctionProvider != null) {
         _log('Using MockAuctionProvider for web');
-        final auctions = mockAuctionProvider.auctions;
-        
-        if (auctions.isEmpty) {
+        final mockAuctions = mockAuctionProvider.auctions;
+        _log('Found ${mockAuctions.length} mock auctions');
+
+        if (mockAuctions.isEmpty) {
           return const Center(
-            child: Text('No active auctions found'),
+            child: Text('No active auctions available'),
           );
         }
-        
-        return ListView.builder(
-          itemCount: auctions.length,
-          itemBuilder: (context, index) {
-            final auction = auctions[index];
-            return _buildAuctionCard(auction, web3Service);
-          },
-        );
+
+        // Group auctions by their base device ID
+        final groupedAuctions = _groupAuctionsByBaseDevice(mockAuctions);
+        _log('Grouped ${groupedAuctions.length} device auctions from ${mockAuctions.length} auctions');
+
+        return _buildGroupedAuctionsList(groupedAuctions, web3Service);
       }
     }
-    
+
     return RefreshIndicator(
-      onRefresh: _refreshAuctions,
+      onRefresh: _refreshData,
       child: Column(
         children: [
-          // Compact transaction status indicator for pending transactions only
+          // Pending transactions section
           if (_pendingTransactions.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              margin: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue.withOpacity(0.3)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.sync, color: Colors.blue, size: 16),
-                  const SizedBox(width: 8),
-                  Text(
-                    _pendingTransactions.length == 1
-                        ? '1 transaction in progress'
-                        : '${_pendingTransactions.length} transactions in progress',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () {
-                      showModalBottomSheet(
-                        context: context,
-                        builder: (context) => Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
+            Card(
+              margin: const EdgeInsets.all(16),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.pending_actions, color: Colors.orange),
+                        SizedBox(width: 8),
+                        Text(
+                          'Pending Transactions',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    if (_pendingTransactions.isEmpty)
+                      const Text('No pending transactions')
+                    else
+                      ExpansionTile(
+                        title: Text('${_pendingTransactions.length} transactions in progress'),
+                        children: [
+                          ListView(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
                             children: [
-                              const Text(
-                                'Pending Transactions',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 18,
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8.0),
+                                child: Text(
+                                  'These transactions are being processed on the blockchain and may take a few minutes to complete.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontStyle: FontStyle.italic,
+                                  ),
                                 ),
                               ),
                               const SizedBox(height: 8),
-                              ..._pendingTransactions.map((tx) => 
-                                TransactionStatusWidget(
-                                  transaction: tx,
-                                  compact: false,
-                                )
-                              ).toList(),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                    style: TextButton.styleFrom(
-                      minimumSize: Size.zero,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Details', style: TextStyle(fontSize: 12)),
-                  ),
-                ],
-              ),
-            ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _errorMessage != null
-                    ? Center(child: Text('Error: $_errorMessage'))
-                    : FutureBuilder(
-                        future: web3Service.loadActiveAuctions(),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.done) {
-                            return ListView.builder(
-                              controller: _auctionsScrollController, // Use the scroll controller
-                              itemCount: web3Service.activeAuctions.length,
-                              itemBuilder: (context, index) {
-                                final deviceId = web3Service.activeAuctions.keys.elementAt(index);
-                                final auction = web3Service.activeAuctions[deviceId]!;
-                                
-                                // Skip if auction data is invalid
-                                if (auction['endTime'] == null) {
-                                  return const SizedBox.shrink();
-                                }
-                                
-                                final now = DateTime.now();
-                                // Handle different endTime formats safely
-                                DateTime endTime;
-                                if (auction['endTime'] is BigInt) {
-                                  // Handle BigInt format
-                                  final endTimeBigInt = auction['endTime'] as BigInt;
-                                  endTime = DateTime.fromMillisecondsSinceEpoch(
-                                    (endTimeBigInt.toInt() * 1000)
-                                  );
-                                } else if (auction['endTime'] is DateTime) {
-                                  // Handle DateTime format directly
-                                  endTime = auction['endTime'] as DateTime;
-                                } else if (auction['endTime'] is int) {
-                                  // Handle int format (seconds since epoch)
-                                  final endTimeInt = auction['endTime'] as int;
-                                  endTime = DateTime.fromMillisecondsSinceEpoch(endTimeInt * 1000);
-                                } else {
-                                  // Fallback to current time plus 1 hour if format is unknown
-                                  endTime = DateTime.now().add(const Duration(hours: 1));
-                                  developer.log('Unknown endTime format: ${auction['endTime']}');
-                                }
-                                final hasEnded = now.isAfter(endTime);
-                                
-                                // Safely handle all auction data fields with null checks and type conversions
-                                final isActive = auction['active'] is bool ? auction['active'] as bool : false;
-                                final isFinalized = auction['finalized'] is bool ? auction['finalized'] as bool : false;
-                                
-                                // Handle highestBidder safely
-                                final String? highestBidder = auction['highestBidder'] is String ? auction['highestBidder'] as String : null;
-                                final hasControl = highestBidder != null && highestBidder == web3Service.currentAddress;
-                                
-                                // Handle owner safely
-                                final String owner = auction['owner'] is String ? auction['owner'] as String : 'Unknown';
-                                
-                                // Handle highestBid safely
-                                BigInt highestBid;
-                                try {
-                                  if (auction['highestBid'] is BigInt) {
-                                    highestBid = auction['highestBid'] as BigInt;
-                                  } else if (auction['highestBid'] is int) {
-                                    highestBid = BigInt.from(auction['highestBid'] as int);
-                                  } else if (auction['highestBid'] is String) {
-                                    highestBid = BigInt.parse(auction['highestBid'] as String);
-                                  } else {
-                                    highestBid = BigInt.zero;
-                                    developer.log('Unknown highestBid format: ${auction['highestBid']}');
-                                  }
-                                } catch (e) {
-                                  highestBid = BigInt.zero;
-                                  developer.log('Error parsing highestBid: $e');
-                                }
-                                
-                                // Handle minBid safely
-                                BigInt minBid;
-                                try {
-                                  if (auction['minBid'] is BigInt) {
-                                    minBid = auction['minBid'] as BigInt;
-                                  } else if (auction['minBid'] is int) {
-                                    minBid = BigInt.from(auction['minBid'] as int);
-                                  } else if (auction['minBid'] is String) {
-                                    minBid = BigInt.parse(auction['minBid'] as String);
-                                  } else {
-                                    minBid = BigInt.zero;
-                                    developer.log('Unknown minBid format: ${auction['minBid']}');
-                                  }
-                                } catch (e) {
-                                  minBid = BigInt.zero;
-                                  developer.log('Error parsing minBid: $e');
-                                }
-
-                                // Check if this is the auction we should highlight
-                                final isHighlighted = widget.deviceId != null && deviceId == widget.deviceId;
-
-                                return Card(
-                                  margin: const EdgeInsets.all(8.0),
-                                  // Highlight the card if it matches the deviceId parameter
-                                  color: isHighlighted ? Colors.amber.shade50 : null,
-                                  shape: isHighlighted 
-                                    ? RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                        side: BorderSide(color: Colors.amber.shade700, width: 2),
-                                      )
-                                    : null,
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(16.0),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text('Device ID: ${deviceId.substring(0, 10)}...'),
-                                        Text('Owner: ${_formatAddress(owner)}'),
-                                        Text('End Time: ${_formatDateTime(endTime)}'),
-                                        Text('Minimum Bid: ${_formatEther(minBid)} ETH'),
-                                        if (highestBid > BigInt.zero && highestBidder != null)
-                                          Text(
-                                            'Current Bid: ${_formatEther(highestBid)} ETH by ${_formatAddress(highestBidder)}',
-                                          ),
-                                        const SizedBox(height: 8),
-                                        // Status indicator
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: isActive 
-                                                ? Colors.green.shade100 
-                                                : (isFinalized ? Colors.blue.shade100 : Colors.orange.shade100),
-                                            borderRadius: BorderRadius.circular(4),
-                                          ),
-                                          child: Text(
-                                            isActive 
-                                                ? 'Active' 
-                                                : (isFinalized ? 'Finalized' : 'Ended'),
-                                            style: TextStyle(
-                                              color: isActive 
-                                                  ? Colors.green.shade800 
-                                                  : (isFinalized ? Colors.blue.shade800 : Colors.orange.shade800),
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 16),
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                          children: [
-                                            if (isActive && !hasEnded)
-                                              ElevatedButton(
-                                                onPressed: () => _showBidDialog(context, web3Service, deviceId, auction),
-                                                child: const Text('Place Bid'),
-                                              ),
-                                            if (hasEnded && !isFinalized)
-                                              ElevatedButton(
-                                                onPressed: () => _finalizeAuction(web3Service, deviceId),
-                                                child: const Text('Finalize Auction'),
-                                              ),
-                                            if (hasControl)
-                                              ElevatedButton(
-                                                onPressed: () {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (context) => DeviceControlScreen(
-                                                        deviceId: deviceId,
-                                                        endTime: endTime,
-                                                      ),
-                                                    ),
-                                                  );
-                                                },
-                                                child: const Text('Control Device'),
-                                              ),
-                                          ],
-                                        ),
-                                      ],
+                              ..._pendingTransactions.map((tx) {
+                                // Convert the map to a format TransactionStatusWidget can use
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 8.0),
+                                  child: Card(
+                                    elevation: 1,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(8.0),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text('Transaction ID: ${tx['id']}'),
+                                          Text('Status: ${tx['status']}'),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 );
-                              },
-                            );
-                          } else {
-                            return const Center(child: CircularProgressIndicator());
-                          }
-                        },
+                              }).toList(),
+                            ],
+                          ),
+                        ],
                       ),
+                  ],
+                ),
+              ),
+            ),
+          
+          // Auctions list
+          Expanded(
+            child: FutureBuilder<List<Auction>>(
+              future: _fetchAuctions(web3Service),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
+                } else if (snapshot.hasError) {
+                  return Center(
+                    child: Text('Error: ${snapshot.error}'),
+                  );
+                } else {
+                  if (snapshot.connectionState == ConnectionState.done) {
+                    // Process auction entries to handle both Map and Auction objects
+                    final auctionList = _processAuctionEntries(web3Service.activeAuctions);
+
+                    // Group auctions by base device ID
+                    final groupedAuctions = _groupAuctionsByBaseDevice(auctionList);
+
+                    if (groupedAuctions.isEmpty) {
+                      return const Center(
+                        child: Text('No active auctions found'),
+                      );
+                    }
+
+                    return ListView.builder(
+                      controller: _auctionsScrollController,
+                      itemCount: groupedAuctions.length,
+                      itemBuilder: (context, index) {
+                        final deviceId = groupedAuctions.keys.elementAt(index);
+                        final slots = groupedAuctions[deviceId]!;
+
+                        // Highlight the card if it matches the deviceId parameter
+                        final isHighlighted = widget.deviceId != null && deviceId == widget.deviceId;
+
+                        // Apply highlighting if needed
+                        if (isHighlighted) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.blue, width: 2),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            margin: const EdgeInsets.all(8),
+                            child: _buildDeviceWithMultiSlotsCard(deviceId, slots, web3Service),
+                          );
+                        }
+
+                        return _buildDeviceWithMultiSlotsCard(deviceId, slots, web3Service);
+                      },
+                    );
+                  }
+                  return const Center(child: Text('No data available'));
+                }
+              },
+            ),
           ),
         ],
       ),
     );
   }
 
-  /// Build an auction card for the given auction
-  Widget _buildAuctionCard(Auction auction, Web3Service web3Service) {
-    final now = DateTime.now();
-    final hasEnded = auction.endTime.isBefore(now);
-    final formattedTimeRemaining = auction.formattedTimeRemaining;
-    final isActive = auction.isActive;
-    final isFinalized = auction.isFinalized;
-    final hasControl = auction.highestBidder == web3Service.currentAddress;
-    
+  Future<List<Auction>> _fetchAuctions(Web3Service web3Service) async {
+    // Set auctions in state
+    _auctions = _processAuctionEntries(web3Service.activeAuctions);
+    return _auctions;
+  }
+
+  /// Process and display auction entries, handling both auction objects and maps
+  List<Auction> _processAuctionEntries(Map<String, dynamic> auctions) {
+    final List<Auction> result = [];
+
+    for (final entry in auctions.entries) {
+      if (entry.value is Auction) {
+        // If it's already an Auction object, add it directly
+        result.add(entry.value as Auction);
+        // Important: return here to prevent reaching the conversion code below
+        continue;
+      }
+
+      // Handle Map representation
+      if (entry.value is Map<String, dynamic>) {
+        try {
+          final auctionData = entry.value as Map<String, dynamic>;
+          final auction = Auction.fromBlockchainData(auctionData);
+          result.add(auction);
+        } catch (e) {
+          _log('Failed to convert auction data to Auction object: $e');
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /// Group auctions by their base device ID
+  Map<String, List<Auction>> _groupAuctionsByBaseDevice(List<Auction> auctions) {
+    final Map<String, List<Auction>> result = {};
+
+    for (final auction in auctions) {
+      // Extract the base device ID
+      String baseDeviceId = auction.deviceId;
+
+      // Check for both formats: deviceId-session-X and deviceId::timestamp
+      if (baseDeviceId.contains('-session-')) {
+        baseDeviceId = baseDeviceId.split('-session-').first;
+      } else if (baseDeviceId.contains('::')) {
+        baseDeviceId = baseDeviceId.split('::').first;
+      }
+
+      _log('Grouping auction: ${auction.deviceId} with base ID: $baseDeviceId');
+
+      // Add to group
+      if (!result.containsKey(baseDeviceId)) {
+        result[baseDeviceId] = [];
+      }
+
+      result[baseDeviceId]!.add(auction);
+    }
+
+    // Sort each group by start time
+    result.forEach((key, slots) {
+      slots.sort((a, b) => a.startTime.compareTo(b.startTime));
+    });
+
+    return result;
+  }
+
+  /// Build a card for displaying a device with multiple auction slots
+  Widget _buildDeviceWithMultiSlotsCard(String deviceId, List<Auction> slots, Web3Service web3Service) {
+    // Sort slots by start time
+    slots.sort((a, b) => a.startTime.compareTo(b.startTime));
+
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Device Header
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: Text(
-                    'Device ID: ${auction.deviceId}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18.0,
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.devices,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                 ),
-                if (hasControl)
-                  const Chip(
-                    label: Text('You have control'),
-                    backgroundColor: Colors.green,
-                    labelStyle: TextStyle(color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Device ID: ${_formatAddress(deviceId)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      Text(
+                        'Owner: ${_formatAddress(slots.first.owner)}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      Text(
+                        '${slots.length} time slots available',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.secondary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
                   ),
+                ),
               ],
             ),
-            const SizedBox(height: 8.0),
-            Text('Owner: ${_formatAddress(auction.owner)}'),
-            const SizedBox(height: 4.0),
-            Text('Start Time: ${_formatDateTime(auction.startTime)}'),
-            Text('End Time: ${_formatDateTime(auction.endTime)}'),
-            const SizedBox(height: 4.0),
-            Text('Minimum Bid: ${auction.minimumBid} ETH'),
-            Text('Highest Bid: ${auction.highestBid} ETH'),
-            if (auction.highestBidder.isNotEmpty && auction.highestBidder != '0x0000000000000000000000000000000000000000')
-              Text('Highest Bidder: ${_formatAddress(auction.highestBidder)}'),
-            const SizedBox(height: 8.0),
-            if (!hasEnded)
-              Text(
-                'Time Remaining: $formattedTimeRemaining',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              )
-            else if (!isFinalized)
-              const Text(
-                'Auction Ended (Not Finalized)',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.orange,
-                ),
-              )
-            else
-              const Text(
-                'Auction Finalized',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green,
-                ),
-              ),
-            const SizedBox(height: 16.0),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (isActive && !hasEnded)
-                  ElevatedButton(
-                    onPressed: () => _showBidDialog(context, web3Service, auction.deviceId, null),
-                    child: const Text('Place Bid'),
-                  ),
-                if (hasEnded && !isFinalized)
-                  ElevatedButton(
-                    onPressed: () => _finalizeAuction(web3Service, auction.deviceId),
-                    child: const Text('Finalize Auction'),
-                  ),
-                if (hasControl)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8.0),
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => DeviceControlScreen(
-                              deviceId: auction.deviceId,
-                              endTime: auction.endTime,
-                            ),
-                          ),
-                        );
-                      },
-                      child: const Text('Control Device'),
+
+            const Divider(height: 24),
+
+            // Slot List
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: slots.length,
+              itemBuilder: (context, index) {
+                final slot = slots[index];
+                final now = DateTime.now();
+                final isActive = slot.startTime.isBefore(now) && slot.endTime.isAfter(now);
+                final hasEnded = slot.endTime.isBefore(now);
+
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  color: isActive
+                      ? Theme.of(context).colorScheme.primary.withOpacity(0.05)
+                      : null,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: BorderSide(
+                      color: isActive
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.grey.withOpacity(0.3),
+                      width: isActive ? 1 : 0.5,
                     ),
                   ),
-              ],
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        // Time indicator
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? Theme.of(context).colorScheme.primary
+                                : (hasEnded
+                                    ? Colors.grey
+                                    : Theme.of(context).colorScheme.secondary),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            isActive
+                                ? 'ACTIVE'
+                                : (hasEnded ? 'ENDED' : 'UPCOMING'),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+
+                        // Slot details
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Slot ${index + 1}: ${_formatDateTime(slot.startTime)} - ${_formatDateTime(slot.endTime)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Min Bid: ${_formatEther(slot.minimumBid)} ETH',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                        if (slot.highestBid > 0)
+                                          Text(
+                                            'Current Bid: ${_formatEther(slot.highestBid)} ETH',
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                          ),
+                                        if (slot.highestBidder.isNotEmpty && slot.highestBidder != '0x0000000000000000000000000000000000000000')
+                                          Text(
+                                            'By: ${_formatAddress(slot.highestBidder)}',
+                                            style: const TextStyle(fontSize: 12),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+
+                                  // Actions
+                                  if (!slot.isFinalized && !hasEnded)
+                                    ElevatedButton(
+                                      onPressed: () => _bidOnAuction(slot),
+                                      style: ElevatedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                        textStyle: const TextStyle(fontSize: 12),
+                                      ),
+                                      child: const Text('Bid'),
+                                    )
+                                  else if (!slot.isFinalized && hasEnded && slot.highestBidder == web3Service.currentAddress)
+                                    ElevatedButton(
+                                      onPressed: () => _finalizeAuctionSlot(slot.deviceId),
+                                      style: ElevatedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                        textStyle: const TextStyle(fontSize: 12),
+                                      ),
+                                      child: const Text('Finalize'),
+                                    )
+                                  else if (slot.isFinalized)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: const Text(
+                                        'FINALIZED',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.green,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
           ],
         ),
@@ -998,196 +1160,55 @@ class _AuctionScreenState extends State<AuctionScreen> {
     );
   }
 
-  Future<void> _connectWallet() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  /// Build a ListView of grouped auction slots
+  Widget _buildGroupedAuctionsList(Map<String, List<Auction>> groupedAuctions, Web3Service web3Service) {
+    // Sort groups so they appear in a consistent order
+    final sortedKeys = groupedAuctions.keys.toList()..sort();
 
-    try {
-      final web3 = Provider.of<Web3Service>(context, listen: false);
-      await web3.connect();
-      
-      // Give it a moment to connect before trying to initialize
-      await Future.delayed(const Duration(seconds: 1));
-      
-      // Manually initialize contract and load auctions
-      try {
-        await web3.initializeContract();
-        await web3.loadActiveAuctions();
-      } catch (e) {
-        developer.log('Contract initialization error: $e');
-        // Continue anyway - we're at least connected
-      }
-      
-      setState(() {
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-        _isLoading = false;
-      });
-    }
+    return ListView.builder(
+      controller: _auctionsScrollController,
+      itemCount: sortedKeys.length,
+      itemBuilder: (context, index) {
+        final deviceId = sortedKeys[index];
+        final slots = groupedAuctions[deviceId]!;
+
+        // Sort slots by start time
+        slots.sort((a, b) => a.startTime.compareTo(b.startTime));
+
+        return _buildDeviceWithMultiSlotsCard(deviceId, slots, web3Service);
+      },
+    );
   }
 
-  Future<void> _showBidDialog(
-    BuildContext context,
-    Web3Service web3,
-    String deviceId,
-    Map<String, dynamic>? auction,
-  ) async {
-    final highestBid = auction?['highestBid'] is BigInt ? auction!['highestBid'] as BigInt : BigInt.zero;
-    final minRequired = highestBid > BigInt.zero 
-        ? highestBid + BigInt.one // Minimum increment of 1 wei
-        : auction?['minBid'] is BigInt ? auction!['minBid'] as BigInt : BigInt.zero;
+  /// Method to refresh auction data
+  Future<void> _refreshData() async {
+    final web3Service = Provider.of<Web3Service>(context, listen: false);
     
-    // Convert wei to ETH for display
-    final minRequiredEth = minRequired.toDouble() / 1e18;
-    
-    // Store context in a local variable to avoid using it across async gaps
-    final currentContext = context;
-    
-    final amount = await _showBidDialogNew(currentContext, minRequiredEth);
-    
-    if (amount == null) return;
-    
-    setState(() {
-      _isLoading = true;
-    });
+    _showLoadingIndicator('Refreshing auctions...');
+    _errorMessage = null;
     
     try {
-      // Store context in a local variable to avoid using it across async gaps
-      final scaffoldMessenger = ScaffoldMessenger.of(currentContext);
-      final metaTxProvider = Provider.of<MetaTransactionProvider>(currentContext, listen: false);
+      await web3Service.loadActiveAuctions();
       
-      // Place bid using meta-transaction
-      // ignore: unused_local_variable
-      final txId = await metaTxProvider.executeFunction(
-        targetContract: web3.getContractAddress(),
-        functionSignature: 'placeBid(string,uint256)',
-        functionParams: [deviceId, (amount * 1e18).toInt()],
-        description: 'Bid $amount ETH on auction $deviceId',
-      );
-      
-      // Show a subtle confirmation that the bid was submitted
-      if (mounted) {
-        scaffoldMessenger.showSnackBar(
-          SnackBar(
-            content: const Text('Bid submitted'),
-            backgroundColor: Colors.blue,
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        );
+      // If a specific deviceId is provided, scroll to it after refreshing
+      if (widget.deviceId != null) {
+        _scrollToHighlightedAuction();
       }
-      
-      // Update pending transactions
-      _updatePendingTransactions();
-      
-      // Refresh auctions after a short delay to allow transaction to process
-      Future.delayed(const Duration(seconds: 2), _refreshAuctions);
     } catch (e) {
       setState(() {
-        _errorMessage = 'Failed to place bid: ${e.toString()}';
+        _errorMessage = 'Failed to refresh auctions: ${e.toString()}';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_errorMessage!)),
-      );
+      _log('Error refreshing auctions: ${e.toString()}');
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      _hideLoadingIndicator();
     }
   }
 
-  Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
-    // Store context in a local variable to avoid using it across async gaps
-    final currentContext = context;
-    
-    setState(() {
-      _isLoading = true;
-    });
-    
-    try {
-      // Store context in a local variable to avoid using it across async gaps
-      final scaffoldMessenger = ScaffoldMessenger.of(currentContext);
-      final metaTxProvider = Provider.of<MetaTransactionProvider>(currentContext, listen: false);
-      
-      // Finalize auction using meta-transaction
-      // ignore: unused_local_variable
-      final txId = await metaTxProvider.executeFunction(
-        targetContract: web3.getContractAddress(),
-        functionSignature: 'finalizeAuction(string)',
-        functionParams: [deviceId],
-        description: 'Finalize auction $deviceId',
-      );
-      
-      // Show a subtle confirmation
-      if (mounted) {
-        scaffoldMessenger.showSnackBar(
-          SnackBar(
-            content: const Text('Finalization request submitted'),
-            backgroundColor: Colors.blue,
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        );
-      }
-      
-      // Update pending transactions
-      _updatePendingTransactions();
-      
-      // Refresh auctions after a short delay to allow transaction to process
-      Future.delayed(const Duration(seconds: 2), _refreshAuctions);
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to finalize auction: ${e.toString()}';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_errorMessage!)),
-      );
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  /// Format an Ethereum address for display
-  String _formatAddress(String address) {
-    if (address.isEmpty) {
-      return 'N/A';
-    }
-    if (address.length < 10) {
-      return address;
-    }
-    return '${address.substring(0, 6)}...${address.substring(address.length - 4)}';
-  }
-
-  /// Format a DateTime for display
-  String _formatDateTime(DateTime dateTime) {
-    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} '
-        '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
-  }
-
-  String _formatEther(BigInt wei) {
-    final ethValue = wei.toDouble() / 1e18;
-    return ethValue.toStringAsFixed(4);
-  }
-
+  /// Method to show network status dialog
   void _showNetworkStatus() async {
-    final web3Service = context.read<Web3Service>();
+    final web3Service = Provider.of<Web3Service>(context, listen: false);
     final currentContext = context;
-    
+
     // Show loading dialog
     showDialog(
       context: currentContext,
@@ -1202,23 +1223,23 @@ class _AuctionScreenState extends State<AuctionScreen> {
         ),
       ),
     );
-    
+
     try {
       // Get network status
       final status = await web3Service.checkNetworkStatus();
-      
+
       // Close loading dialog
       if (mounted) Navigator.pop(currentContext);
-      
+
       // Format the status information for display
       final formattedStatus = StringBuffer();
       formattedStatus.writeln('📊 Blockchain Status Report:');
       formattedStatus.writeln('');
-      
+
       // Connection status
       final bool connected = status['connected'] ?? false;
       final bool mockMode = status['mockMode'] ?? false;
-      
+
       if (mockMode) {
         formattedStatus.writeln('🔶 Running in MOCK MODE (no blockchain)');
         formattedStatus.writeln('');
@@ -1231,25 +1252,25 @@ class _AuctionScreenState extends State<AuctionScreen> {
         }
         formattedStatus.writeln('');
       }
-      
+
       // Network information
       if (status['networkName'] != null) {
         formattedStatus.writeln('🌐 Network: ${status['networkName']} (Chain ID: ${status['chainId']})');
       }
-      
+
       // Account information
       if (status['account'] != null) {
         final account = status['account'] as String;
         final shortAccount = '${account.substring(0, 6)}...${account.substring(account.length - 4)}';
         formattedStatus.writeln('👤 Account: $shortAccount');
       }
-      
+
       // Contract information
       if (status['contractAddress'] != null) {
         final contractAddress = status['contractAddress'] as String;
         final shortContract = '${contractAddress.substring(0, 6)}...${contractAddress.substring(contractAddress.length - 4)}';
         formattedStatus.writeln('📝 Contract: $shortContract');
-        
+
         if (status['contractResponsive'] == true) {
           formattedStatus.writeln('✅ Contract is responsive');
           formattedStatus.writeln('📊 Auction Count: ${status['auctionCount']}');
@@ -1260,17 +1281,17 @@ class _AuctionScreenState extends State<AuctionScreen> {
           }
         }
       }
-      
+
       // Gas price
       if (status['gasPrice'] != null) {
         formattedStatus.writeln('⛽ Gas Price: ${status['gasPrice']} wei');
       }
-      
+
       // Block number
       if (status['blockNumber'] != null) {
         formattedStatus.writeln('🧱 Block Number: ${status['blockNumber']}');
       }
-      
+
       // Show the status dialog
       if (mounted) {
         showDialog(
@@ -1301,7 +1322,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
                       ),
                     );
                   }
-                  _refreshAuctions();
+                  _refreshData();
                 },
                 child: Text(
                   web3Service.isMockMode
@@ -1321,7 +1342,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
                       ),
                     );
                   }
-                  _refreshAuctions();
+                  _refreshData();
                 },
                 child: const Text(
                   'Force Mock Mode with Auctions',
@@ -1335,7 +1356,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
     } catch (e) {
       // Close loading dialog
       if (mounted) Navigator.pop(currentContext);
-      
+
       // Show error dialog
       if (mounted) {
         showDialog(
@@ -1355,68 +1376,44 @@ class _AuctionScreenState extends State<AuctionScreen> {
     }
   }
 
-  Future<void> _refreshAuctions() async {
-    final web3Service = context.read<Web3Service>();
-    await web3Service.loadActiveAuctions();
-    
-    // If a specific deviceId is provided, scroll to it after refreshing
-    if (widget.deviceId != null) {
-      _scrollToHighlightedAuction();
-    }
+  /// Log a message with the AuctionScreen prefix
+  void _log(String message) {
+    developer.log('AuctionScreen: $message');
   }
 
-  Future<double?> _showBidDialogNew(BuildContext context, [double minBid = 0.1]) async {
-    double? bidAmount;
-    
-    return showDialog<double?>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Place a Bid'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Enter bid amount in ETH (minimum ${minBid + 0.01} ETH):'),
-              TextField(
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  hintText: 'e.g., ${(minBid + 0.01).toStringAsFixed(2)}',
-                ),
-                onChanged: (value) {
-                  try {
-                    bidAmount = double.parse(value);
-                  } catch (_) {
-                    bidAmount = null;
-                  }
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                if (bidAmount != null && bidAmount! > minBid) {
-                  Navigator.pop(context, bidAmount);
-                } else {
-                  final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text('Please enter a valid amount greater than $minBid ETH'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
-              },
-              child: const Text('Confirm'),
-            ),
-          ],
-        );
-      },
-    );
+  /// Format an Ethereum address for display
+  String _formatAddress(String address) {
+    if (address.isEmpty) {
+      return 'N/A';
+    }
+    if (address.length < 10) {
+      return address;
+    }
+    return '${address.substring(0, 6)}...${address.substring(address.length - 4)}';
+  }
+
+  /// Format a DateTime for display
+  String _formatDateTime(DateTime dateTime) {
+    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} '
+        '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// Format a value to ETH, handling both BigInt (wei) and double (already in ETH) values
+  String _formatEther(dynamic value) {
+    if (value is BigInt) {
+      // Convert from wei to ETH
+      final ethValue = value.toDouble() / 1e18;
+      return ethValue.toStringAsFixed(4);
+    } else if (value is double) {
+      // Already in ETH
+      return value.toStringAsFixed(4);
+    } else if (value is num) {
+      // Other numeric type
+      return (value.toDouble()).toStringAsFixed(4);
+    } else {
+      // Unknown type
+      return '0.0000';
+    }
   }
 
   void handleAuctionCreationError(dynamic e) {
@@ -1477,10 +1474,202 @@ class _AuctionScreenState extends State<AuctionScreen> {
     }
   }
 
-  void _updateEndDate() {
+  void _bidOnAuction(Auction auction) {
+    _showBidDialog(
+      context,
+      auction,
+      Provider.of<Web3Service>(context, listen: false),
+      _refreshData,
+    );
+  }
+
+  void _finalizeAuctionSlot(String auctionId) {
+    final web3Service = Provider.of<Web3Service>(context, listen: false);
+    _finalizeAuction(web3Service, auctionId);
+  }
+
+  Future<void> _showBidDialog(
+    BuildContext context,
+    Auction auction,
+    Web3Service web3,
+    VoidCallback refreshData,
+  ) async {
+    final highestBid = auction.highestBid;
+    final minRequired = highestBid > 0
+        ? highestBid + 0.000000000000000001 // Minimum increment of 1 wei
+        : auction.minimumBid;
+
+    // Convert wei to ETH for display
+    final minRequiredEth = minRequired;
+
+    double amount = minRequiredEth;
+
+    final controller = TextEditingController(text: minRequiredEth.toString());
+
+    // Show the bid dialog
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Place a Bid'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Minimum bid: $minRequiredEth ETH'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'Bid Amount (ETH)',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (value) {
+                try {
+                  amount = double.parse(value);
+                } catch (e) {
+                  // Invalid input, keep the last valid amount
+                }
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(amount),
+            child: const Text('Place Bid'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null) return; // User cancelled
+
+    // Place the bid using the Web3Service
     setState(() {
-      _endDate = _startDate.add(Duration(hours: int.parse(_totalTimePeriodController.text)));
-      _endDateController.text = _formatDateTime(_endDate);
+      _isLoading = true;
+      _loadingMessage = 'Placing bid...';
+    });
+
+    try {
+      final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
+
+      // Create the transaction
+      final txId = await metaTxProvider.executeFunction(
+        targetContract: web3.getContractAddress(),
+        functionSignature: 'placeBid(string,uint256)',
+        functionParams: [auction.deviceId, (result * 1e18).toInt()],
+        description: 'Bid $result ETH on auction ${auction.deviceId}',
+      );
+
+      // Show a subtle confirmation that the bid was submitted
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Bid submitted! Transaction ID: ${txId.substring(0, 10)}...'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: Colors.white,
+            onPressed: () {
+              // Maybe open a transaction details page
+            },
+          ),
+        ),
+      );
+
+      _updatePendingTransactions();
+
+      // Refresh auctions after a short delay to allow transaction to process
+      Future.delayed(const Duration(seconds: 2), refreshData);
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to place bid: ${e.toString()}';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to place bid: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = 'Finalizing auction...';
+    });
+
+    try {
+      final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
+
+      // Create the transaction
+      final txId = await metaTxProvider.executeFunction(
+        targetContract: web3.getContractAddress(),
+        functionSignature: 'finalizeAuction(string)',
+        functionParams: [deviceId],
+        description: 'Finalize auction for device $deviceId',
+      );
+
+      // Show a subtle confirmation
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Finalization submitted! Transaction ID: ${txId.substring(0, 10)}...'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: Colors.white,
+            onPressed: () {
+              // Maybe open a transaction details page
+            },
+          ),
+        ),
+      );
+
+      _updatePendingTransactions();
+
+      // Refresh auctions after a delay
+      Future.delayed(const Duration(seconds: 2), _refreshData);
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to finalize auction: ${e.toString()}';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to finalize auction: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _showLoadingIndicator(String message) {
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = message;
+    });
+  }
+
+  void _hideLoadingIndicator() {
+    setState(() {
+      _isLoading = false;
     });
   }
 }

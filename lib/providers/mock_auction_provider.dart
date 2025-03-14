@@ -27,65 +27,102 @@ class MockAuctionProvider extends ChangeNotifier {
   void _initializeMockAuctions() {
     _log('Initializing mock auctions');
     
-    // Create some mock auctions for testing
     final now = DateTime.now();
     
-    // Active auction
-    _auctions.add(Auction(
-      deviceId: 'device-1',
-      owner: '0xMockOwner1',
-      startTime: now.subtract(const Duration(hours: 1)),
-      endTime: now.add(const Duration(hours: 23)),
-      minimumBid: 0.1,
-      highestBid: 0.1,
-      highestBidder: '0x0000000000000000000000000000000000000000',
-      isActive: true,
-      isFinalized: false,
-    ));
+    // Create a multi-slot test device with 6 slots of 5 minutes each
+    final String testDeviceId = 'multi-slot-device-test';
     
-    // Auction ending soon
-    _auctions.add(Auction(
-      deviceId: 'device-2',
-      owner: '0xMockOwner2',
-      startTime: now.subtract(const Duration(hours: 23)),
-      endTime: now.add(const Duration(hours: 1)),
-      minimumBid: 0.2,
-      highestBid: 0.3,
-      highestBidder: '0xMockBidder1',
-      isActive: true,
-      isFinalized: false,
-    ));
+    // Create 6 sequential 5-minute slots
+    for (int i = 0; i < 6; i++) {
+      final slotStartTime = now.add(Duration(minutes: i * 5));
+      final slotEndTime = slotStartTime.add(const Duration(minutes: 5));
+      
+      // Use the DeviceSlotIdentifier format: baseDeviceId::timestamp
+      final timestamp = slotStartTime.millisecondsSinceEpoch;
+      final slotDeviceId = '$testDeviceId::$timestamp';
+      
+      // For some slots, set a higher bid to show bidding activity
+      final double highestBid = i == 1 ? 0.25 : (i == 3 ? 0.35 : 0.1);
+      final String highestBidder = (i == 1 || i == 3) 
+          ? '0xBidderWallet9876543210' 
+          : '0x0000000000000000000000000000000000000000';
+      
+      _auctions.add(Auction(
+        deviceId: slotDeviceId,
+        owner: '0xYourWallet1234567890',
+        startTime: slotStartTime,
+        endTime: slotEndTime,
+        minimumBid: 0.1,
+        highestBid: highestBid,
+        highestBidder: highestBidder,
+        isActive: true,
+        isFinalized: false,
+      ));
+      
+      _log('Created multi-slot auction: $slotDeviceId from ${slotStartTime.toString()} to ${slotEndTime.toString()}');
+    }
     
-    // Ended auction
-    _auctions.add(Auction(
-      deviceId: 'device-3',
-      owner: '0xMockOwner3',
-      startTime: now.subtract(const Duration(hours: 48)),
-      endTime: now.subtract(const Duration(hours: 24)),
-      minimumBid: 0.1,
-      highestBid: 0.5,
-      highestBidder: '0xMockBidder2',
-      isActive: false,
-      isFinalized: true,
-    ));
+    // Create a user auction with multiple 5-minute sessions (using the session- format)
+    final String userDeviceId = 'user-device-1';
     
-    // Create an additional mock auction with current timestamp
-    final deviceId = 'mock-device-${DateTime.now().millisecondsSinceEpoch}';
-    _log('Creating additional mock auction with ID: $deviceId');
+    // Add 6 sequential 5-minute sessions for a user device
+    for (int i = 0; i < 6; i++) {
+      final sessionStart = now.add(Duration(minutes: i * 5));
+      final sessionEnd = sessionStart.add(const Duration(minutes: 5));
+      final sessionId = '$userDeviceId-session-$i';
+      
+      // For the first session, set a higher bid to show bidding activity
+      final double highestBid = i == 0 ? 0.25 : 0.1;
+      final String highestBidder = i == 0 
+          ? '0xYourWallet1234567890' // Simulating the user as highest bidder on first session
+          : '0x0000000000000000000000000000000000000000';
+      
+      _auctions.add(Auction(
+        deviceId: sessionId,
+        owner: '0xYourWallet1234567890', // Set user as owner
+        startTime: sessionStart,
+        endTime: sessionEnd,
+        minimumBid: 0.1,
+        highestBid: highestBid,
+        highestBidder: highestBidder,
+        isActive: true,
+        isFinalized: false,
+      ));
+      
+      _log('Created user session auction: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
+    }
     
-    _auctions.add(Auction(
-      deviceId: deviceId,
-      owner: '0xMockOwner${DateTime.now().millisecondsSinceEpoch}',
-      startTime: now,
-      endTime: now.add(const Duration(hours: 2)),
-      minimumBid: 0.1,
-      highestBid: 0.0,
-      highestBidder: '0x0000000000000000000000000000000000000000',
-      isActive: true,
-      isFinalized: false,
-    ));
+    // Create marketplace auction with multiple 5-minute sessions
+    final String marketDeviceId = 'market-device-1';
     
-    _log('Created ${_auctions.length} mock auctions');
+    // Add 6 sequential 5-minute sessions for marketplace
+    for (int i = 0; i < 6; i++) {
+      final sessionStart = now.add(Duration(minutes: i * 5));
+      final sessionEnd = sessionStart.add(const Duration(minutes: 5));
+      final sessionId = '$marketDeviceId-session-$i';
+      
+      // Add some bid activity on marketplace auctions
+      final double highestBid = i == 2 ? 0.35 : (i == 4 ? 0.4 : 0.1);
+      final String highestBidder = (i == 2 || i == 4)
+          ? '0xBidder${i}987654321'
+          : '0x0000000000000000000000000000000000000000';
+      
+      _auctions.add(Auction(
+        deviceId: sessionId,
+        owner: '0xMarketOwner987654321', // Set market owner
+        startTime: sessionStart,
+        endTime: sessionEnd,
+        minimumBid: 0.1,
+        highestBid: highestBid,
+        highestBidder: highestBidder,
+        isActive: true,
+        isFinalized: false,
+      ));
+      
+      _log('Created marketplace session auction: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
+    }
+    
+    _log('Mock auction provider initialized with user and marketplace 5-minute sessions');
     _initialized = true;
     notifyListeners();
   }
@@ -146,12 +183,7 @@ class MockAuctionProvider extends ChangeNotifier {
       return false;
     }
     
-    if (auction.isFinalized) {
-      _log('Auction is already finalized');
-      return false;
-    }
-    
-    // Update the auction to be finalized
+    // Update the auction to finalized state
     _auctions[auctionIndex] = Auction(
       deviceId: auction.deviceId,
       owner: auction.owner,
@@ -168,7 +200,7 @@ class MockAuctionProvider extends ChangeNotifier {
     return true;
   }
   
-  /// Create a new auction
+  /// Create an auction with specified parameters
   Future<bool> createAuction({
     required String deviceId,
     required DateTime startTime,
@@ -177,18 +209,16 @@ class MockAuctionProvider extends ChangeNotifier {
   }) async {
     _log('Creating mock auction for device: $deviceId');
     
-    // Check if an auction with this device ID already exists
-    final existingAuctionIndex = _auctions.indexWhere((a) => a.deviceId == deviceId);
-    if (existingAuctionIndex != -1) {
+    final endTime = startTime.add(duration);
+    
+    // Check if an auction already exists for this device
+    if (_auctions.any((a) => a.deviceId == deviceId)) {
       _log('Auction already exists for device: $deviceId');
       return false;
     }
     
-    final endTime = startTime.add(duration);
-    _log('Creating mock auction with endTime: $endTime');
-    
-    // Create a new auction
-    final newAuction = Auction(
+    // Create new auction
+    _auctions.add(Auction(
       deviceId: deviceId,
       owner: '0xMockOwner${DateTime.now().millisecondsSinceEpoch}',
       startTime: startTime,
@@ -198,12 +228,34 @@ class MockAuctionProvider extends ChangeNotifier {
       highestBidder: '0x0000000000000000000000000000000000000000',
       isActive: true,
       isFinalized: false,
-    );
-    
-    _auctions.add(newAuction);
-    _log('Added mock auction to _auctions, count: ${_auctions.length}');
+    ));
     
     notifyListeners();
     return true;
+  }
+  
+  /// Add a mock auction directly (used for multi-slot auctions)
+  void addMockAuction({
+    required String deviceId,
+    required DateTime startTime,
+    required DateTime endTime,
+    required double minimumBid,
+  }) {
+    _log('Adding mock auction for device: $deviceId');
+    
+    // Create new auction
+    _auctions.add(Auction(
+      deviceId: deviceId,
+      owner: '0xMockOwner${DateTime.now().millisecondsSinceEpoch}',
+      startTime: startTime,
+      endTime: endTime,
+      minimumBid: minimumBid,
+      highestBid: 0.0,
+      highestBidder: '0x0000000000000000000000000000000000000000',
+      isActive: true,
+      isFinalized: false,
+    ));
+    
+    notifyListeners();
   }
 }

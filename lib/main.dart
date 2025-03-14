@@ -8,6 +8,11 @@ import 'package:dadi/services/web3_service.dart';
 import 'package:dadi/providers/meta_transaction_provider.dart';
 import 'package:dadi/providers/mock_auction_provider.dart';
 import 'package:dadi/screens/home_screen_new.dart';
+import 'package:dadi/models/user_role.dart';
+import 'package:dadi/providers/user_role_provider.dart';
+import 'package:dadi/screens/role_selection_screen.dart';
+import 'package:dadi/screens/creator_dashboard_screen.dart';
+import 'package:dadi/screens/user_auction_browse_screen.dart';
 import 'dart:developer' as developer;
 import 'package:dadi/theme/app_theme.dart';
 
@@ -26,8 +31,39 @@ class MyApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.system,
-      home: const HomeScreenNew(),
+      home: const RoleBasedHomeScreen(),
     );
+  }
+}
+
+/// Widget that decides which screen to show based on user role
+class RoleBasedHomeScreen extends StatelessWidget {
+  const RoleBasedHomeScreen({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final web3Service = Provider.of<Web3Service>(context);
+    final roleProvider = Provider.of<UserRoleProvider>(context);
+    
+    // If wallet is not connected, show the original home screen
+    if (!web3Service.isConnected) {
+      return const HomeScreenNew();
+    }
+    
+    // If the user hasn't selected a role yet, show the role selection screen
+    if (!roleProvider.hasSelectedRole) {
+      return const RoleSelectionScreen();
+    }
+    
+    // Show different screens based on role
+    switch (roleProvider.role) {
+      case UserRole.creator:
+        return const CreatorDashboardScreen();
+      case UserRole.user:
+        return const UserAuctionBrowseScreen();
+      default:
+        return const HomeScreenNew();
+    }
   }
 }
 
@@ -80,6 +116,9 @@ void main() async {
     trustedForwarderAddress: trustedForwarderAddress,
   )['web3Service'];
   
+  // Enable mock mode for testing
+  web3Service.isMockMode = true;
+  
   // Create providers
   final metaTransactionProvider = MetaTransactionProvider(
     metaTransactionService: metaTransactionService,
@@ -92,11 +131,13 @@ void main() async {
     webSocketService: metaTransactionService.webSocketService,
   );
   
+  // Create user role provider
+  final userRoleProvider = UserRoleProvider();
+  
   // Force mock mode for web platform
   if (kIsWeb) {
     developer.log('Web platform detected, forcing mock mode');
-    // The web3Service is already set to mock mode in the service factory
-    // No need to call forceEnableMockMode() here as it's already handled
+    // The web3Service is already set to mock mode
     developer.log('Mock mode already enabled for web platform');
   }
   
@@ -106,7 +147,8 @@ void main() async {
         ChangeNotifierProvider<Web3Service>.value(value: web3Service),
         ChangeNotifierProvider<MockButtplugService>(create: (context) => mockButtplugService),
         ChangeNotifierProvider<MetaTransactionProvider>(create: (context) => metaTransactionProvider),
-        Provider<WalletServiceInterface>(create: (context) => walletService),
+        ChangeNotifierProvider<WalletServiceInterface>(create: (context) => walletService),
+        ChangeNotifierProvider<UserRoleProvider>.value(value: userRoleProvider),
         if (kIsWeb) ChangeNotifierProvider<MockAuctionProvider>(create: (context) => MockAuctionProvider()),
       ],
       child: const MyApp(),

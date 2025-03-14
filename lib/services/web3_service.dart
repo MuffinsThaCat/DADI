@@ -63,55 +63,46 @@ class Web3Service extends ChangeNotifier {
       _log('Initializing mock auction data');
       _log('Current active auctions count: ${_activeAuctions.length}');
       
-      // Only initialize if we don't have any auctions yet
+      // Create mock auctions with 5-minute sessions for testing
       if (_activeAuctions.isEmpty) {
-        _log('No existing mock auctions found, creating default mock auctions');
+        _log('Creating mock auctions with 5-minute sessions for testing');
         
-        // Get current time for comparison
         final now = DateTime.now();
         
-        // Create some mock auctions
-        final endTime1 = now.add(const Duration(hours: 2));
-        final endTime2 = now.add(const Duration(hours: 5));
-        final endTime3 = now.subtract(const Duration(hours: 2)); // This one has ended
+        // Add auctions with multiple 5-minute sessions for marketplace browsing
+        final String marketDeviceId = 'market-device-1';
         
-        // Mock auction 1
-        _activeAuctions['device1'] = {
-          'deviceId': 'device1',
-          'owner': '0xMockOwner123456789',
-          'startTime': now.subtract(const Duration(hours: 2)),
-          'endTime': BigInt.from(endTime1.millisecondsSinceEpoch ~/ 1000),
-          'highestBid': BigInt.from(100),
-          'highestBidder': '0xMockBidder123456789',
-          'active': true,
-          'finalized': false,
-        };
+        // Add 6 sequential 5-minute sessions
+        for (int i = 0; i < 6; i++) {
+          final sessionStart = now.add(Duration(minutes: i * 5));
+          final sessionEnd = sessionStart.add(const Duration(minutes: 5));
+          final sessionId = '$marketDeviceId-session-$i';
+          
+          // Add some bid activity on certain sessions
+          final BigInt highestBid = i == 2 
+              ? BigInt.from(350000000000000000) // 0.35 ETH
+              : (i == 4 ? BigInt.from(400000000000000000) // 0.4 ETH
+              : BigInt.from(100000000000000000)); // 0.1 ETH
+          
+          final String highestBidder = (i == 2 || i == 4)
+              ? '0xBidder${i}987654321'
+              : '0x0000000000000000000000000000000000000000';
+          
+          _activeAuctions[sessionId] = {
+            'owner': '0xMarketOwner987654321', // Different from currentAddress
+            'startTime': sessionStart,
+            'endTime': sessionEnd,
+            'minBid': BigInt.from(100000000000000000), // 0.1 ETH
+            'highestBid': highestBid,
+            'highestBidder': highestBidder,
+            'isActive': true,
+            'isFinalized': false,
+          };
+          
+          _log('Created marketplace session auction: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
+        }
         
-        // Mock auction 2
-        _activeAuctions['device2'] = {
-          'deviceId': 'device2',
-          'owner': '0xMockOwner987654321',
-          'startTime': now.subtract(const Duration(hours: 1)),
-          'endTime': BigInt.from(endTime2.millisecondsSinceEpoch ~/ 1000),
-          'highestBid': BigInt.from(200),
-          'highestBidder': '0xMockBidder987654321',
-          'active': true,
-          'finalized': false,
-        };
-        
-        // Mock auction 3 (ended)
-        _activeAuctions['device3'] = {
-          'deviceId': 'device3',
-          'owner': '0xMockOwner555555555',
-          'startTime': now.subtract(const Duration(days: 2)),
-          'endTime': BigInt.from(endTime3.millisecondsSinceEpoch ~/ 1000),
-          'highestBid': BigInt.from(300),
-          'highestBidder': '0xMockBidder555555555',
-          'active': false,
-          'finalized': true,
-        };
-        
-        _log('Created ${_activeAuctions.length} default mock auctions');
+        _log('Mock data initialized with marketplace 5-minute sessions');
         notifyListeners();
       } else {
         _log('Using existing ${_activeAuctions.length} mock auctions');
@@ -135,9 +126,26 @@ class Web3Service extends ChangeNotifier {
   }
 
   // Getters
-  String? get currentAddress => isMockMode ? '0xMockAddress123456789' : _currentAddress;
+  String? get currentAddress {
+    _log('Current address: $_currentAddress');
+    return isMockMode ? '0xMockAddress123456789' : _currentAddress;
+  }
   
-  Map<String, Map<String, dynamic>> get activeAuctions => _activeAuctions;
+  Map<String, Map<String, dynamic>> get activeAuctions {
+    // Filter out the default test auctions but NOT user-created ones
+    final filteredAuctions = Map<String, Map<String, dynamic>>.from(_activeAuctions);
+    
+    // We'll only filter out specific known default test auctions
+    filteredAuctions.removeWhere((key, value) => 
+      (key == 'device-1' || key == 'device-2' || key == 'device-3' ||
+       key == 'mock-device-1' || key == 'mock-device-2') &&
+      ((value['owner'] as String?) == '0xMockOwner' || 
+       (value['owner'] as String?) == '0xMockOwner1' || 
+       (value['owner'] as String?) == '0xMockOwner2')
+    );
+    
+    return filteredAuctions;
+  }
   bool get isConnected => isMockMode || (_currentAddress != null && _provider != null);
   
   Future<void> logEthereumProviderStatus() async {
@@ -526,7 +534,6 @@ class Web3Service extends ChangeNotifier {
               
               // Store auction data (include both active and inactive auctions)
               _activeAuctions[deviceIdStr] = {
-                'deviceId': deviceIdStr,
                 'owner': owner,
                 'startTime': startTime,
                 'endTime': endTime,
@@ -982,7 +989,7 @@ class Web3Service extends ChangeNotifier {
         
         _activeAuctions[deviceId] = {
           'deviceId': deviceId,
-          'owner': '0xMockOwner${DateTime.now().millisecondsSinceEpoch}',
+          'owner': currentAddress, // Use the current user's address
           'startTime': startTime,
           'endTime': BigInt.from(endTime.millisecondsSinceEpoch ~/ 1000),
           'minimumBid': minimumBid,
@@ -1689,6 +1696,7 @@ class Web3Service extends ChangeNotifier {
       
       _log('Creating mock auction for device: $auctionDeviceId, start: $startTime, end: $endTime');
       
+      // Create the auction
       final result = await createAuction(
         deviceId: auctionDeviceId,
         startTime: startTime,
@@ -1746,6 +1754,14 @@ class Web3Service extends ChangeNotifier {
       _log('Error placing mock bid: $e', error: e);
       return OperationResult.failure(message: 'Failed to place mock bid: ${e.toString()}');
     }
+  }
+
+  /// Add an auction directly to the active auctions map
+  /// This bypasses any filtering and ensures the auction is properly added
+  void addAuctionDirectly({required String deviceId, required Map<String, dynamic> auctionData}) {
+    _log('Adding auction directly - deviceId: $deviceId, owner: ${auctionData['owner']}');
+    _activeAuctions[deviceId] = auctionData;
+    notifyListeners();
   }
 
   /// Force mock mode and create mock auctions
@@ -1903,5 +1919,78 @@ class Web3Service extends ChangeNotifier {
         message: 'Error getting active auctions: $e',
       );
     }
+  }
+
+  /// Refresh the active auctions list
+  Future<void> refreshAuctions() async {
+    _log('Refreshing active auctions');
+    await loadActiveAuctions();
+    notifyListeners();
+  }
+
+  // Creates a test auction with a preset future time
+  Future<bool> createTestAuctionWithPresetTime() async {
+    if (!isMockMode) {
+      _log('Enabling mock mode for test auction');
+      enableMockMode();
+    }
+    
+    try {
+      _log('Creating test auction with preset future time');
+      
+      // Use a fixed future date for testing
+      final DateTime testStartTime = DateTime(2025, 5, 1, 10, 0); // May 1st, 2025, 10:00 AM
+      final String testDeviceId = 'test-device-${DateTime.now().millisecondsSinceEpoch}';
+      
+      // Create 6 sequential 5-minute sessions
+      final int sessionCount = 6;
+      final int sessionDurationMinutes = 5;
+      
+      for (int i = 0; i < sessionCount; i++) {
+        final sessionStart = testStartTime.add(Duration(minutes: i * sessionDurationMinutes));
+        final sessionEnd = sessionStart.add(Duration(minutes: sessionDurationMinutes));
+        final sessionId = '$testDeviceId-session-$i';
+        
+        _activeAuctions[sessionId] = {
+          'owner': _currentAddress ?? '0xTestOwner123456789',
+          'startTime': sessionStart,
+          'endTime': sessionEnd,
+          'minBid': BigInt.from(100000000000000000), // 0.1 ETH
+          'highestBid': BigInt.from(100000000000000000), // 0.1 ETH
+          'highestBidder': '0x0000000000000000000000000000000000000000',
+          'isActive': true,
+          'isFinalized': false,
+        };
+        
+        _log('Created test auction session: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
+      }
+      
+      _log('Test auction with preset time created successfully');
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _log('Error creating test auction with preset time:', error: e);
+      return false;
+    }
+  }
+
+  // Calculate the minimum bid increment percentage
+  double getBidIncrementPercentage() {
+    // Default increment is 5%
+    return 0.05;
+  }
+
+  // Calculate the next minimum bid based on current highest bid and increment percentage
+  double getNextMinimumBid(double currentHighestBid) {
+    // If current highest bid is 0 or very low, start with minimum of 0.1 ETH
+    if (currentHighestBid <= 0.001) {
+      return 0.1;
+    }
+    
+    final incrementPercentage = getBidIncrementPercentage();
+    // Calculate the next bid amount with the percentage increase
+    final nextBid = currentHighestBid * (1 + incrementPercentage);
+    // Round to 4 decimal places for better UI display
+    return double.parse(nextBid.toStringAsFixed(4));
   }
 }

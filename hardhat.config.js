@@ -30,7 +30,7 @@ module.exports = {
       // Enable CORS for local development with more explicit settings
       jsonRpcServer: {
         host: "127.0.0.1",
-        port: 8087,
+        port: 8545,
         cors: {
           origin: "*",
           methods: ["GET", "POST"],
@@ -41,7 +41,7 @@ module.exports = {
     },
     localhost: {
       chainId: 31337,
-      url: "http://127.0.0.1:8087",
+      url: "http://127.0.0.1:8545",
       timeout: 60000, // Increase timeout for local development
     },
     // Updated from Goerli to Sepolia

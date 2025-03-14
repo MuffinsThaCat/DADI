@@ -47,47 +47,8 @@ class Web3ServiceMobile extends Web3ServiceInterface {
   }
   
   void _initializeMockData() {
-    // Create some mock auctions for testing
-    final now = DateTime.now();
-    
-    // Active auction
-    _auctions['device-1'] = Auction(
-      deviceId: 'device-1',
-      owner: '0xMockOwner',
-      startTime: now.subtract(const Duration(hours: 1)),
-      endTime: now.add(const Duration(hours: 23)),
-      minimumBid: 0.1,
-      highestBid: 0.1,
-      highestBidder: '0x0000000000000000000000000000000000000000',
-      isActive: true,
-      isFinalized: false,
-    );
-    
-    // Auction ending soon
-    _auctions['device-2'] = Auction(
-      deviceId: 'device-2',
-      owner: '0xMockOwner',
-      startTime: now.subtract(const Duration(hours: 23)),
-      endTime: now.add(const Duration(hours: 1)),
-      minimumBid: 0.2,
-      highestBid: 0.3,
-      highestBidder: '0xMockBidder1',
-      isActive: true,
-      isFinalized: false,
-    );
-    
-    // Ended auction
-    _auctions['device-3'] = Auction(
-      deviceId: 'device-3',
-      owner: '0xMockOwner',
-      startTime: now.subtract(const Duration(hours: 48)),
-      endTime: now.subtract(const Duration(hours: 24)),
-      minimumBid: 0.1,
-      highestBid: 0.5,
-      highestBidder: '0xMockBidder2',
-      isActive: false,
-      isFinalized: true,
-    );
+    // No longer creating default mock auctions - users will create their own
+    _log('Mock mode enabled, but not creating default mock auctions');
   }
   
   @override

@@ -36,7 +36,9 @@ class Auction {
     
     final endTimeUnix = data['endTime'] is BigInt 
         ? (data['endTime'] as BigInt).toInt() 
-        : (data['endTime'] as int);
+        : data['endTime'] is DateTime
+            ? (data['endTime'] as DateTime).millisecondsSinceEpoch ~/ 1000
+            : (data['endTime'] as int);
     
     final highestBidWei = data['highestBid'] is BigInt 
         ? (data['highestBid'] as BigInt) 
@@ -55,8 +57,8 @@ class Auction {
           : 0.01, // Default minimum bid if not provided
       highestBid: highestBidEth,
       highestBidder: data['highestBidder'] as String,
-      isActive: data['active'] as bool,
-      isFinalized: data['finalized'] as bool,
+      isActive: data['active'] == null ? true : data['active'] as bool,
+      isFinalized: data['finalized'] == null ? false : data['finalized'] as bool,
       controlSlots: data['controlSlots'] != null ? data['controlSlots'].map((slot) => DeviceControlSlot.fromJson(slot)).toList() : [],
     );
   }

@@ -5,6 +5,7 @@ import '../services/mock_buttplug_service.dart';
 import 'auction_list_screen.dart';
 import 'settings_screen.dart';
 import 'wallet_screen.dart';
+import 'role_selection_screen.dart';
 import '../widgets/wavy_background.dart';
 
 class HomeScreenNew extends StatefulWidget {
@@ -86,7 +87,12 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
       body: WavyBackground(
         primaryColor: theme.colorScheme.primary,
         secondaryColor: theme.colorScheme.secondary,
-        child: _buildCurrentScreen(),
+        child: Column(
+          children: [
+            if (web3.isConnected) _buildRoleSelectionBanner(context),
+            Expanded(child: _buildCurrentScreen()),
+          ],
+        ),
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
@@ -107,6 +113,94 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
             label: 'Settings',
           ),
         ],
+      ),
+    );
+  }
+  
+  Widget _buildRoleSelectionBanner(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            theme.colorScheme.primary,
+            theme.colorScheme.secondary,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _showRoleSelection(context),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.person,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Choose Your Role',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Are you a creator or a user?',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.arrow_forward,
+                  color: Colors.white,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  
+  void _showRoleSelection(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const RoleSelectionScreen(),
       ),
     );
   }
