@@ -69,7 +69,7 @@ class MultiSlotAuctionService {
   }
   
   /// Place a bid on a specific auction slot
-  Future<OperationResult<double>> placeBidOnSlot({
+  Future<OperationResult> placeBidOnSlot({
     required String deviceId, 
     required DateTime slotStartTime,
     required double amount,
@@ -130,7 +130,7 @@ class MultiSlotAuctionService {
   }
   
   /// Finalize an auction slot
-  Future<OperationResult<bool>> finalizeSlot({
+  Future<OperationResult> finalizeSlot({
     required String deviceId,
     required DateTime slotStartTime,
   }) async {

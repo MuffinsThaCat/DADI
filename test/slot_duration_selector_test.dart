@@ -4,7 +4,7 @@ import 'package:dadi/widgets/slot_duration_selector.dart';
 
 void main() {
   testWidgets('SlotDurationSelector displays available durations and handles selection', (WidgetTester tester) async {
-    int selectedDuration = 5;
+    int selectedDuration = 15;
     
     // Build the widget
     await tester.pumpWidget(
@@ -16,7 +16,7 @@ void main() {
               selectedDuration = duration;
             },
             // Use custom durations that match what we expect to test
-            availableDurations: [5, 10, 15, 20, 30, 60],
+            availableDurations: [15, 30, 45, 60, 90, 120, 240],
           ),
         ),
       ),
@@ -26,30 +26,31 @@ void main() {
     expect(find.text('Select Time Slot Duration'), findsOneWidget);
     
     // Verify duration options are displayed
-    expect(find.text('5 min'), findsOneWidget);
-    expect(find.text('10 min'), findsOneWidget);
     expect(find.text('15 min'), findsOneWidget);
-    expect(find.text('20 min'), findsOneWidget);
     expect(find.text('30 min'), findsOneWidget);
+    expect(find.text('45 min'), findsOneWidget);
     expect(find.text('60 min'), findsOneWidget);
+    expect(find.text('90 min'), findsOneWidget);
+    expect(find.text('120 min'), findsOneWidget);
+    expect(find.text('240 min'), findsOneWidget);
     
-    // Tap on the 20-minute option
-    await tester.tap(find.text('20 min'));
+    // Tap on the 45-minute option
+    await tester.tap(find.text('45 min'));
     await tester.pump();
     
     // Verify the selection was updated
-    expect(selectedDuration, 20);
+    expect(selectedDuration, 45);
     
-    // Tap on the 30-minute option
-    await tester.tap(find.text('30 min'));
+    // Tap on the 60-minute option
+    await tester.tap(find.text('60 min'));
     await tester.pump();
     
     // Verify the selection was updated again
-    expect(selectedDuration, 30);
+    expect(selectedDuration, 60);
   });
   
   testWidgets('SlotDurationSelector can use custom durations', (WidgetTester tester) async {
-    int selectedDuration = 10;
+    int selectedDuration = 15;
     
     // Build the widget with custom durations
     await tester.pumpWidget(
@@ -60,27 +61,28 @@ void main() {
             onDurationSelected: (duration) {
               selectedDuration = duration;
             },
-            availableDurations: [5, 10, 15, 20],
+            availableDurations: [15, 30, 45, 60],
           ),
         ),
       ),
     );
     
     // Verify custom duration options are displayed
-    expect(find.text('5 min'), findsOneWidget);
-    expect(find.text('10 min'), findsOneWidget);
     expect(find.text('15 min'), findsOneWidget);
-    expect(find.text('20 min'), findsOneWidget);
+    expect(find.text('30 min'), findsOneWidget);
+    expect(find.text('45 min'), findsOneWidget);
+    expect(find.text('60 min'), findsOneWidget);
     
     // Default durations should not be present if not in custom list
-    expect(find.text('30 min'), findsNothing);
-    expect(find.text('60 min'), findsNothing);
+    expect(find.text('90 min'), findsNothing);
+    expect(find.text('120 min'), findsNothing);
+    expect(find.text('240 min'), findsNothing);
     
-    // Tap on the 15-minute option
-    await tester.tap(find.text('15 min'));
+    // Tap on the 45-minute option
+    await tester.tap(find.text('45 min'));
     await tester.pump();
     
     // Verify the selection was updated
-    expect(selectedDuration, 15);
+    expect(selectedDuration, 45);
   });
 }

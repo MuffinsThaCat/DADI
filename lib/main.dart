@@ -21,8 +21,25 @@ void _log(String message, {Object? error}) {
   developer.log('DADI App: $message', error: error);
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({Key? key}) : super(key: key);
+
+  @override
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Initialize the Web3Service to set up mock wallet if needed
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final web3Service = Provider.of<Web3Service>(context, listen: false);
+      web3Service.initialize().then((_) {
+        print('Web3Service initialized, mock wallet address: ${web3Service.currentAddress}');
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -11,6 +11,8 @@ import '../providers/meta_transaction_provider.dart';
 import '../services/web3_service.dart';
 import '../services/mock_buttplug_service.dart';
 import '../widgets/wavy_background.dart';
+import '../widgets/slot_duration_selector.dart';
+import '../screens/creator_dashboard_screen.dart';
 
 class AuctionScreen extends StatefulWidget {
   final int initialTab;
@@ -49,6 +51,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
   DateTime _selectedStartTime = DateTime.now().add(const Duration(minutes: 5));
   List<Map<String, dynamic>> _pendingTransactions = [];
   final Set<String> _shownCompletionNotifications = {};
+  int _selectedSlotDuration = 15; // Default to 15 minutes
 
   // Initialize controllers and fetch auctions
   @override
@@ -56,26 +59,26 @@ class _AuctionScreenState extends State<AuctionScreen> {
     super.initState();
     _log('AuctionScreen initState');
 
-    // Check if we're in mock mode and force create auctions if needed
+    // Initialize date and time picker with current time + 5 minutes
+    _selectedStartTime = DateTime.now().add(const Duration(minutes: 5));
+    _startTimeController.text = _selectedStartTime.toIso8601String().substring(0, 16);
+    
+    // Set default values
+    _minimumBidController.text = '0.01';
+    _durationController.text = '60';
+    _slotDurationController.text = '5';
+    _numSlotsController.text = '12';
+    _deviceIdController.text = 'device-${DateTime.now().millisecondsSinceEpoch}';
+    
+    // Fetch initial auctions
+    _fetchAuctions(context.read<Web3Service>());
+    
+    // Update any pending transactions
+    _updatePendingTransactions();
+    
+    // Check if mock auctions should be created
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAndCreateMockAuctions();
-    });
-
-    _deviceIdController.text = 'device-${DateTime.now().millisecondsSinceEpoch}';
-    _startTimeController.text = _formatDateTime(_selectedStartTime);
-    _durationController.text = '60';
-    _minimumBidController.text = '0.01';
-    _numSlotsController.text = '6';
-    _slotDurationController.text = '5';
-
-    // Delay to ensure provider is initialized
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _updatePendingTransactions();
-
-      // If a specific deviceId is provided, scroll to it after the auctions are loaded
-      if (widget.deviceId != null) {
-        _scrollToHighlightedAuction();
-      }
     });
   }
 
@@ -344,23 +347,10 @@ class _AuctionScreenState extends State<AuctionScreen> {
               },
             ),
             const SizedBox(height: 16),
-            TextFormField(
-              controller: _durationController,
-              decoration: const InputDecoration(
-                labelText: 'Duration (minutes)',
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter duration';
-                }
-                final minutes = int.tryParse(value);
-                if (minutes == null || minutes <= 0) {
-                  return 'Please enter a valid positive number';
-                }
-                return null;
-              },
+            SlotDurationSelector(
+              onDurationSelected: _onSlotDurationSelected,
+              selectedDuration: _selectedSlotDuration,
+              totalDurationMinutes: int.tryParse(_durationController.text) ?? 60,
             ),
             const SizedBox(height: 16),
             TextFormField(
@@ -419,12 +409,12 @@ class _AuctionScreenState extends State<AuctionScreen> {
                           final deviceId = _deviceIdController.text;
                           if (deviceId.isEmpty) {
                             // Use a mock device ID if no device is selected
-                            final mockDeviceId = 'mock_device_${DateTime.now().millisecondsSinceEpoch}';
+                            final mockDeviceId = 'mock-device-${DateTime.now().millisecondsSinceEpoch}';
                             _log('No device selected, using mock device ID: $mockDeviceId');
 
                             // Convert form values to appropriate types
                             final minBidEth = double.parse(_minimumBidController.text);
-                            final duration = int.parse(_durationController.text);
+                            final duration = _selectedSlotDuration;
 
                             _log('Creating auction with params:');
                             _log('Device ID: $mockDeviceId');
@@ -432,11 +422,13 @@ class _AuctionScreenState extends State<AuctionScreen> {
                             _log('Duration: $duration minutes');
                             _log('Min Bid: $minBidEth ETH');
 
-                            // Call the contract method with mock device ID
+                            // Call the contract method
                             try {
                               if (kIsWeb) {
                                 // Use MockAuctionProvider for web
                                 final mockAuctionProvider = context.read<MockAuctionProvider?>();
+                                final web3 = Provider.of<Web3Service>(context, listen: false);
+                                
                                 if (mockAuctionProvider != null) {
                                   _log('Using MockAuctionProvider for web to create auction');
                                   final success = await mockAuctionProvider.createAuction(
@@ -448,12 +440,55 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
                                   if (mounted) {
                                     if (success) {
+                                      _log('✅ AUCTION CREATION SUCCESSFUL via MockAuctionProvider');
+                                      
                                       ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: const Text('Auction created successfully!'),
+                                        const SnackBar(
+                                          content: Text('Auction created successfully!'),
                                           backgroundColor: Colors.green,
                                         ),
                                       );
+                                      
+                                      // Force refresh auctions and log the results
+                                      _log('🔄 Force refreshing auctions after creation');
+                                      await web3.loadActiveAuctions(forceRefresh: true);
+                                      
+                                      // IMPORTANT: After refreshing, make sure the user auction is still there
+                                      if (!web3.activeAuctions.containsKey(mockDeviceId)) {
+                                        _log('‼️ WARNING: User auction was lost after refresh, re-adding it');
+                                        // Re-add the auction to ensure it's displayed
+                                        web3.addAuctionDirectly(
+                                          deviceId: mockDeviceId,
+                                          auctionData: {
+                                            'deviceId': mockDeviceId,
+                                            'owner': web3.currentAddress,
+                                            'startTime': _selectedStartTime,
+                                            'endTime': BigInt.from(_selectedStartTime.add(Duration(minutes: duration)).millisecondsSinceEpoch ~/ 1000),
+                                            'minimumBid': minBidEth,
+                                            'highestBid': BigInt.from(0),
+                                            'highestBidder': '0x0000000000000000000000000000000000000000',
+                                            'active': true,
+                                            'finalized': false,
+                                            'isUserCreated': true,
+                                          },
+                                        );
+                                        _log('✅ Re-added user auction: $mockDeviceId');
+                                      }
+                                      
+                                      _log('📊 Auctions after refresh: ${web3.activeAuctions.length}');
+                                      web3.activeAuctions.forEach((id, data) {
+                                        _log('  Auction: $id, Owner: ${data['owner']}, isUserCreated: ${data['isUserCreated']}');
+                                      });
+                                      
+                                      // Navigate directly to the dashboard after creating an auction
+                                      if (mounted) {
+                                        Navigator.of(context).pushAndRemoveUntil(
+                                          MaterialPageRoute(
+                                            builder: (context) => const CreatorDashboardScreen(),
+                                          ),
+                                          (route) => false,
+                                        );
+                                      }
                                     } else {
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(
@@ -465,50 +500,120 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                   }
                                 } else {
                                   // Fall back to Web3Service
-                                  await web3.createAuction(
+                                  final result = await web3.createAuction(
                                     deviceId: mockDeviceId,
                                     startTime: _selectedStartTime,
                                     duration: Duration(minutes: duration),
                                     minimumBid: minBidEth,
+                                    isUserCreated: true,  // Mark as user-created auction
                                   );
+                                  
+                                  _log('Auction creation result: ${result.success}');
+                                  
+                                  if (result.success) {
+                                    _log('🔄 Force refreshing auctions after creation (fallback path)');
+                                    await web3.loadActiveAuctions(forceRefresh: true);
+                                  }
+                                  
+                                  // Debug after creation - show all active auctions
+                                  _log('----AFTER AUCTION CREATION----');
+                                  _log('User address: ${web3.currentAddress}');
+                                  _log('Total auctions: ${web3.activeAuctions.length}');
+                                  
+                                  web3.activeAuctions.forEach((key, value) {
+                                    _log('  Auction: $key');
+                                    _log('    Owner: ${value['owner']}');
+                                    _log('    isUserCreated: ${value['isUserCreated']}');
+                                    _log('    Is Owner Current User? ${value['owner'] == web3.currentAddress}');
+                                  });
+                                  
+                                  if (mounted) {
+                                    if (result.success) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Auction created successfully!'),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                      
+                                      // Navigate directly to the dashboard after creating an auction
+                                      if (mounted) {
+                                        Navigator.of(context).pushAndRemoveUntil(
+                                          MaterialPageRoute(
+                                            builder: (context) => const CreatorDashboardScreen(),
+                                          ),
+                                          (route) => false,
+                                        );
+                                      }
+                                    } else {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(result.message),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
                                 }
                               } else {
                                 // Use Web3Service for non-web platforms
-                                await web3.createAuction(
+                                final web3 = Provider.of<Web3Service>(context, listen: false);
+                                final result = await web3.createAuction(
                                   deviceId: mockDeviceId,
                                   startTime: _selectedStartTime,
                                   duration: Duration(minutes: duration),
                                   minimumBid: minBidEth,
                                 );
-                              }
-
-                              if (mounted && !kIsWeb) {
-                                // Check if we've switched to mock mode during the process
-                                if (web3.isMockMode) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: const Text('Created mock auction due to blockchain connection issues'),
-                                      backgroundColor: Colors.orange,
-                                      duration: const Duration(seconds: 5),
-                                    ),
-                                  );
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: const Text('Auction created successfully!'),
-                                      backgroundColor: Colors.green,
-                                    ),
-                                  );
+                                
+                                _log('Non-web platform: Created auction via Web3Service');
+                                _log('Result success: ${result.success}');
+                                
+                                // Force refresh the auctions list to ensure the dashboard shows the new auction
+                                await web3.loadActiveAuctions(forceRefresh: true);
+                                
+                                // Log all auctions after refresh
+                                _log('All auctions after refresh:');
+                                web3.activeAuctions.forEach((key, value) {
+                                  _log('  Auction: $key, Owner: ${value['owner']}, isUserCreated: ${value['isUserCreated']}');
+                                });
+                                
+                                if (mounted) {
+                                  if (result.success) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Auction created successfully!'),
+                                        backgroundColor: Colors.green,
+                                      ),
+                                    );
+                                    
+                                    // Navigate directly to the dashboard after creating an auction
+                                    if (mounted) {
+                                      Navigator.of(context).pushAndRemoveUntil(
+                                        MaterialPageRoute(
+                                          builder: (context) => const CreatorDashboardScreen(),
+                                        ),
+                                        (route) => false,
+                                      );
+                                    }
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(result.message),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
                                 }
                               }
                             } catch (e) {
+                              _log('ERROR during auction creation: $e');
                               handleAuctionCreationError(e);
                             }
                           } else {
                             // Original code for when a device is selected
                             // Convert form values to appropriate types
                             final minBidEth = double.parse(_minimumBidController.text);
-                            final duration = int.parse(_durationController.text);
+                            final duration = _selectedSlotDuration;
 
                             _log('Creating auction with params:');
                             _log('Device ID: $deviceId');
@@ -521,8 +626,10 @@ class _AuctionScreenState extends State<AuctionScreen> {
                               if (kIsWeb) {
                                 // Use MockAuctionProvider for web
                                 final mockAuctionProvider = context.read<MockAuctionProvider?>();
+                                final web3 = Provider.of<Web3Service>(context, listen: false);
+                                
                                 if (mockAuctionProvider != null) {
-                                  _log('Using MockAuctionProvider for web to create auction with real device');
+                                  _log('Using MockAuctionProvider for web to create auction');
                                   final success = await mockAuctionProvider.createAuction(
                                     deviceId: deviceId,
                                     startTime: _selectedStartTime,
@@ -532,12 +639,55 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
                                   if (mounted) {
                                     if (success) {
+                                      _log('✅ AUCTION CREATION SUCCESSFUL via MockAuctionProvider');
+                                      
                                       ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: const Text('Auction created successfully!'),
+                                        const SnackBar(
+                                          content: Text('Auction created successfully!'),
                                           backgroundColor: Colors.green,
                                         ),
                                       );
+                                      
+                                      // Force refresh auctions and log the results
+                                      _log('🔄 Force refreshing auctions after creation');
+                                      await web3.loadActiveAuctions(forceRefresh: true);
+                                      
+                                      // IMPORTANT: After refreshing, make sure the user auction is still there
+                                      if (!web3.activeAuctions.containsKey(deviceId)) {
+                                        _log('‼️ WARNING: User auction was lost after refresh, re-adding it');
+                                        // Re-add the auction to ensure it's displayed
+                                        web3.addAuctionDirectly(
+                                          deviceId: deviceId,
+                                          auctionData: {
+                                            'deviceId': deviceId,
+                                            'owner': web3.currentAddress,
+                                            'startTime': _selectedStartTime,
+                                            'endTime': BigInt.from(_selectedStartTime.add(Duration(minutes: duration)).millisecondsSinceEpoch ~/ 1000),
+                                            'minimumBid': minBidEth,
+                                            'highestBid': BigInt.from(0),
+                                            'highestBidder': '0x0000000000000000000000000000000000000000',
+                                            'active': true,
+                                            'finalized': false,
+                                            'isUserCreated': true,
+                                          },
+                                        );
+                                        _log('✅ Re-added user auction: $deviceId');
+                                      }
+                                      
+                                      _log('📊 Auctions after refresh: ${web3.activeAuctions.length}');
+                                      web3.activeAuctions.forEach((id, data) {
+                                        _log('  Auction: $id, Owner: ${data['owner']}, isUserCreated: ${data['isUserCreated']}');
+                                      });
+                                      
+                                      // Navigate directly to the dashboard after creating an auction
+                                      if (mounted) {
+                                        Navigator.of(context).pushAndRemoveUntil(
+                                          MaterialPageRoute(
+                                            builder: (context) => const CreatorDashboardScreen(),
+                                          ),
+                                          (route) => false,
+                                        );
+                                      }
                                     } else {
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(
@@ -549,43 +699,109 @@ class _AuctionScreenState extends State<AuctionScreen> {
                                   }
                                 } else {
                                   // Fall back to Web3Service
-                                  await web3.createAuction(
+                                  final result = await web3.createAuction(
                                     deviceId: deviceId,
                                     startTime: _selectedStartTime,
                                     duration: Duration(minutes: duration),
                                     minimumBid: minBidEth,
                                   );
+                                  
+                                  _log('Auction creation result: ${result.success}');
+                                  
+                                  // Debug after creation - show all active auctions
+                                  _log('----AFTER AUCTION CREATION----');
+                                  _log('User address: ${web3.currentAddress}');
+                                  _log('Total auctions: ${web3.activeAuctions.length}');
+                                  
+                                  web3.activeAuctions.forEach((key, value) {
+                                    _log('  Auction: $key');
+                                    _log('    Owner: ${value['owner']}');
+                                    _log('    Is Owner Current User? ${value['owner'] == web3.currentAddress}');
+                                  });
+                                  
+                                  if (mounted) {
+                                    if (result.success) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Auction created successfully!'),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                      
+                                      // Force refresh the auctions list to ensure the dashboard shows the new auction
+                                      await web3.loadActiveAuctions(forceRefresh: true);
+                                      
+                                      // Navigate directly to the dashboard after creating an auction
+                                      if (mounted) {
+                                        Navigator.of(context).pushAndRemoveUntil(
+                                          MaterialPageRoute(
+                                            builder: (context) => const CreatorDashboardScreen(),
+                                          ),
+                                          (route) => false,
+                                        );
+                                      }
+                                    } else {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(result.message),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
                                 }
                               } else {
                                 // Use Web3Service for non-web platforms
-                                await web3.createAuction(
+                                final web3 = Provider.of<Web3Service>(context, listen: false);
+                                final result = await web3.createAuction(
                                   deviceId: deviceId,
                                   startTime: _selectedStartTime,
                                   duration: Duration(minutes: duration),
                                   minimumBid: minBidEth,
                                 );
-                              }
-
-                              if (mounted && !kIsWeb) {
-                                // Check if we've switched to mock mode during the process
-                                if (web3.isMockMode) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: const Text('Created mock auction due to blockchain connection issues'),
-                                      backgroundColor: Colors.orange,
-                                      duration: const Duration(seconds: 5),
-                                    ),
-                                  );
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: const Text('Auction created successfully!'),
-                                      backgroundColor: Colors.green,
-                                    ),
-                                  );
+                                
+                                _log('Non-web platform: Created auction via Web3Service');
+                                _log('Result success: ${result.success}');
+                                
+                                // Force refresh the auctions list to ensure the dashboard shows the new auction
+                                await web3.loadActiveAuctions(forceRefresh: true);
+                                
+                                // Log all auctions after refresh
+                                _log('All auctions after refresh:');
+                                web3.activeAuctions.forEach((key, value) {
+                                  _log('  Auction: $key, Owner: ${value['owner']}, isUserCreated: ${value['isUserCreated']}');
+                                });
+                                
+                                if (mounted) {
+                                  if (result.success) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Auction created successfully!'),
+                                        backgroundColor: Colors.green,
+                                      ),
+                                    );
+                                    
+                                    // Navigate directly to the dashboard after creating an auction
+                                    if (mounted) {
+                                      Navigator.of(context).pushAndRemoveUntil(
+                                        MaterialPageRoute(
+                                          builder: (context) => const CreatorDashboardScreen(),
+                                        ),
+                                        (route) => false,
+                                      );
+                                    }
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(result.message),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
                                 }
                               }
                             } catch (e) {
+                              _log('ERROR during auction creation: $e');
                               handleAuctionCreationError(e);
                             }
                           }
@@ -861,6 +1077,9 @@ class _AuctionScreenState extends State<AuctionScreen> {
                       itemBuilder: (context, index) {
                         final deviceId = groupedAuctions.keys.elementAt(index);
                         final slots = groupedAuctions[deviceId]!;
+
+                        // Sort slots by start time
+                        slots.sort((a, b) => a.startTime.compareTo(b.startTime));
 
                         // Highlight the card if it matches the deviceId parameter
                         final isHighlighted = widget.deviceId != null && deviceId == widget.deviceId;
@@ -1188,7 +1407,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
     _errorMessage = null;
     
     try {
-      await web3Service.loadActiveAuctions();
+      await web3Service.loadActiveAuctions(forceRefresh: true);
       
       // If a specific deviceId is provided, scroll to it after refreshing
       if (widget.deviceId != null) {
@@ -1670,6 +1889,13 @@ class _AuctionScreenState extends State<AuctionScreen> {
   void _hideLoadingIndicator() {
     setState(() {
       _isLoading = false;
+    });
+  }
+
+  void _onSlotDurationSelected(int duration) {
+    setState(() {
+      _selectedSlotDuration = duration;
+      _durationController.text = duration.toString(); // Update the text controller for backward compatibility
     });
   }
 }

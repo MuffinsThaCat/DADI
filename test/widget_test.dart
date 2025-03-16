@@ -58,7 +58,7 @@ class MockWeb3Service extends ChangeNotifier implements Web3Service {
   }
   
   @override
-  Future<void> loadActiveAuctions() async {
+  Future<void> loadActiveAuctions({bool forceRefresh = false}) async {
     _auctions = {
       '0x1234': {'id': '0x1234', 'title': 'Test Auction 1', 'description': 'Test Description 1'},
       '0x5678': {'id': '0x5678', 'title': 'Test Auction 2', 'description': 'Test Description 2'},

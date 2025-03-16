@@ -52,10 +52,10 @@ void main() {
       await tester.tap(thirtyMinOption, warnIfMissed: false);
       await tester.pumpAndSettle();
     } else {
-      // If 30-minute option isn't available, find the 20-minute option
-      final twentyMinOption = find.text('20 min');
-      if (twentyMinOption.evaluate().isNotEmpty) {
-        await tester.tap(twentyMinOption, warnIfMissed: false);
+      // If 30-minute option isn't available, try 45-minute option
+      final fortyFiveMinOption = find.text('45 min');
+      if (fortyFiveMinOption.evaluate().isNotEmpty) {
+        await tester.tap(fortyFiveMinOption, warnIfMissed: false);
         await tester.pumpAndSettle();
       } else {
         // If neither is available, find the 15-minute option
@@ -99,15 +99,15 @@ void main() {
     
     await tester.pumpAndSettle();
     
-    // For a 2-hour auction (120 minutes), we expect durations like 5, 10, 15, 20, 30 minutes
+    // For a 2-hour auction (120 minutes), we expect durations like 15, 30, 45, 60, 90, 120 minutes
     // to be recommended (as they divide 120 minutes into a reasonable number of slots)
     final durationTexts = [
-      find.text('5 min'),
-      find.text('10 min'),
       find.text('15 min'),
-      find.text('20 min'),
       find.text('30 min'),
+      find.text('45 min'),
       find.text('60 min'),
+      find.text('90 min'),
+      find.text('120 min'),
     ];
     
     // At least some of these durations should be present
