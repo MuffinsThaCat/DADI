@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:developer' as developer;
 import '../models/auction.dart';
 import '../models/device_control_slot.dart';
@@ -21,7 +20,8 @@ class MultiSlotAuctionService {
     required int slotCount,
     required double minimumBid,
   }) async {
-    final sessionId = 'session-${DateTime.now().millisecondsSinceEpoch}';
+    // Format the session ID to match what's expected in _extractBaseDeviceId
+    final sessionId = '$sessionName-session-${DateTime.now().millisecondsSinceEpoch}';
     
     _log('Creating multi-slot auction:');
     _log('  Session ID: $sessionId');
@@ -49,8 +49,9 @@ class MultiSlotAuctionService {
         final slotStartTime = startTime.add(Duration(minutes: i * slotDurationMinutes));
         slotStartTimes.add(slotStartTime);
         
-        // Create unique slot ID that includes the session ID
-        final slotId = '$sessionId-slot-$i';
+        // Create unique slot ID that includes the session ID and slot number
+        // Format: sessionName-session-timestamp-slot-i
+        final slotId = '$sessionName-session-${DateTime.now().millisecondsSinceEpoch}-slot-$i';
         
         _log('Creating slot $i:');
         _log('  Slot ID: $slotId');
@@ -180,6 +181,6 @@ class MultiSlotAuctionService {
   }
   
   void _log(String message) {
-    developer.log('MultiSlotAuctionService: $message');
+    developer.log(message, name: 'MultiSlotAuctionService');
   }
 }

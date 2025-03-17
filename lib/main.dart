@@ -7,7 +7,6 @@ import 'package:dadi/services/service_factory.dart';
 import 'package:dadi/services/web3_service.dart';
 import 'package:dadi/services/multi_slot_auction_service.dart';
 import 'package:dadi/providers/meta_transaction_provider.dart';
-import 'package:dadi/providers/mock_auction_provider.dart';
 import 'package:dadi/screens/home_screen_new.dart';
 import 'package:dadi/models/user_role.dart';
 import 'package:dadi/providers/user_role_provider.dart';
@@ -171,7 +170,7 @@ void main() async {
         ChangeNotifierProvider<MetaTransactionProvider>(create: (context) => metaTransactionProvider),
         ChangeNotifierProvider<WalletServiceInterface>(create: (context) => walletService),
         ChangeNotifierProvider<UserRoleProvider>.value(value: userRoleProvider),
-        if (kIsWeb) ChangeNotifierProvider<MockAuctionProvider>(create: (context) => MockAuctionProvider()),
+        // MockAuctionProvider is intentionally disabled to avoid mock auctions
       ],
       child: const MyApp(),
     ),

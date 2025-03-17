@@ -7,9 +7,9 @@ import 'package:provider/provider.dart';
 
 import '../models/auction.dart';
 import '../providers/meta_transaction_provider.dart';
-import '../providers/mock_auction_provider.dart';
 import '../services/navigation_service.dart';
 import '../services/web3_service.dart';
+import '../services/multi_slot_auction_service.dart';
 import '../widgets/wavy_background.dart';
 
 class AuctionScreen extends StatefulWidget {
@@ -47,6 +47,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _log('AuctionScreen - initState');
+    
     // Set default value
     _minimumBidController.text = '0.01';
     _deviceIdController.text = 'device-${DateTime.now().millisecondsSinceEpoch}';
@@ -78,6 +79,9 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
       }
     });
 
+    // Initialize with an immediately resolving empty list to avoid infinite loading
+    _cachedAuctionsFuture = Future.value([]);
+    
     // Set up timer to refresh auction data
     Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted) {
@@ -88,11 +92,22 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
     // Update any pending transactions
     _updatePendingTransactions();
 
-    // Force check for mock auctions at startup
+    // Schedule initialization after the widget is fully built
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _log('AuctionScreen - post frame callback');
       _checkAndCreateMockAuctions();
-      _refreshData();
+      
+      // Refresh data to load actual auctions
+      _refreshData(forceRefresh: true);
+    });
+  }
+
+  Future<List<Auction>>? _cachedAuctionsFuture;
+
+  // Refresh auctions and update the cached future
+  Future<void> _refreshAuctions() async {
+    setState(() {
+      _cachedAuctionsFuture = _fetchAuctions();
     });
   }
 
@@ -385,28 +400,43 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
   }
 
   Widget _buildActiveAuctionsTab() {
+    _log('Building active auctions tab');
+    
     return FutureBuilder<List<Auction>>(
-      future: _fetchAuctions(),
+      future: _cachedAuctionsFuture,
       builder: (context, snapshot) {
+        _log('FutureBuilder state: ${snapshot.connectionState}');
+        
         if (snapshot.connectionState == ConnectionState.waiting) {
+          _log('FutureBuilder is in waiting state');
           return const Center(
             child: CircularProgressIndicator(),
           );
         }
 
         if (snapshot.hasError) {
+          _log('FutureBuilder has error: ${snapshot.error}');
           return Center(
             child: Text('Error: ${snapshot.error}'),
           );
         }
 
         // Check if we have data
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+        if (!snapshot.hasData) {
+          _log('FutureBuilder has no data');
+          return const Center(
+            child: Text('No auction data available'),
+          );
+        }
+        
+        if (snapshot.data!.isEmpty) {
+          _log('FutureBuilder has empty data');
           return const Center(
             child: Text('No active auctions found'),
           );
         }
 
+        _log('FutureBuilder has data with ${snapshot.data!.length} auctions');
         // Build the list of auctions using the fetched data
         return _buildAuctionsList(snapshot.data!);
       },
@@ -440,23 +470,43 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
   /// Process auction entries from various data sources
   List<Auction> _processAuctionEntries(List<dynamic> entries) {
     _log('Processing ${entries.length} auction entries');
+    
+    // If the list is empty, return empty
+    if (entries.isEmpty) {
+      return [];
+    }
+    
+    // If we have only one item and it's already an Auction, just return it
+    if (entries.length == 1 && entries[0] is Auction) {
+      final auction = entries[0] as Auction;
+      _log('Single Auction object found: ${auction.deviceId}');
+      return [auction];
+    }
+    
     List<Auction> result = [];
 
     for (final dynamic auctionData in entries) {
       try {
         if (auctionData is Auction) {
-          final Auction auction = auctionData; // Explicit cast
+          final auction = auctionData; 
           _log('Adding direct Auction object: ${auction.deviceId}');
           result.add(auction);
-          continue; // Skip the rest of this iteration
+          continue; // Skip to next auction (don't try to process as Map)
         }
 
         _log('Processing non-Auction data of type: ${auctionData.runtimeType}');
 
-        // Must be a Map then
-        final Map<String, dynamic> auctionMap = auctionData is Map
-            ? Map<String, dynamic>.from(auctionData as Map)
-            : <String, dynamic>{};
+        // Create an empty map and populate it from the data
+        Map<String, dynamic> auctionMap = {};
+        
+        if (auctionData is Map) {
+          auctionData.forEach((k, v) {
+            auctionMap[k.toString()] = v;
+          });
+        } else {
+          _log('Cannot convert to map, skipping');
+          continue;
+        }
 
         if (auctionMap.isEmpty) {
           _log('Empty map data, skipping');
@@ -560,33 +610,9 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
     try {
       final web3Service = Provider.of<Web3Service>(context, listen: false);
 
-      // First, check if we're running in web mode and use MockAuctionProvider if available
+      // For web mode, we now use Web3Service directly since MockAuctionProvider is removed
       if (kIsWeb) {
-        try {
-          final mockProvider = Provider.of<MockAuctionProvider>(context, listen: false);
-          _log('Using MockAuctionProvider for web platform, found ${mockProvider.auctions.length} auctions');
-
-          // Check if mockProvider has auctions, if not, try to force refresh from Web3Service
-          if (mockProvider.auctions.isEmpty) {
-            _log('MockAuctionProvider has no auctions, forcing refresh from Web3Service');
-            // Force Web3Service to refresh its auctions
-            await web3Service.refreshAuctions();
-
-            // Wait a moment for state to update
-            await Future.delayed(const Duration(milliseconds: 100));
-
-            // Try mockProvider again
-            if (mockProvider.auctions.isNotEmpty) {
-              _log('MockAuctionProvider now has ${mockProvider.auctions.length} auctions after refresh');
-              return mockProvider.auctions;
-            }
-          } else {
-            return mockProvider.auctions;
-          }
-        } catch (e) {
-          _log('MockAuctionProvider not available: $e');
-          // Continue with Web3Service if MockAuctionProvider is not available
-        }
+        _log('Running on web platform, using Web3Service directly');
       }
 
       // Force refresh to get the latest data
@@ -594,7 +620,9 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
       await web3Service.refreshAuctions();
 
       _log('Web3Service has ${web3Service.activeAuctions.length} active auctions');
-      _log('Auction keys: ${web3Service.activeAuctions.keys.join(', ')}');
+      if (web3Service.activeAuctions.isNotEmpty) {
+        _log('Auction keys: ${web3Service.activeAuctions.keys.join(', ')}');
+      }
 
       // Process auction entries
       final auctions = web3Service.activeAuctions;
@@ -614,11 +642,15 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
           auctionsList.add(value);
           continue; // Skip to next iteration to avoid type errors
         } else {
-          // Handle map data (both Map<String, dynamic> and other Map types)
+          // Handle all Map types
           try {
-            // Create a copy of the map to avoid modifying the original
-            final mapCopy = Map<String, dynamic>.from(value as Map);
-
+            Map<String, dynamic> mapCopy = {};
+            
+            // Check runtime type and convert appropriately
+            value.forEach((k, v) {
+              mapCopy[k.toString()] = v;
+            });
+            
             // Ensure deviceId is set
             if (!mapCopy.containsKey('deviceId')) {
               mapCopy['deviceId'] = key;
@@ -627,7 +659,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
             _log('Map data found for: ${mapCopy['deviceId']}');
             auctionsList.add(mapCopy);
           } catch (e) {
-            _log('Error processing map data: $e');
+            _log('Error processing data: $e');
           }
         }
       }
@@ -671,11 +703,23 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
 
     // Check for various formats: deviceId-session-X, deviceId::timestamp, etc.
     if (deviceId.contains('-session-')) {
-      final baseId = deviceId.split('-session-').first;
+      // Handle the multi-slot format: sessionName-session-timestamp-slot-i
+      if (deviceId.contains('-slot-')) {
+        // Extract the part before the timestamp (sessionName)
+        final parts = deviceId.split('-session-');
+        if (parts.isNotEmpty) {
+          final baseId = parts[0];
+          _log('  Extracted base ID (multi-slot format): $baseId');
+          return baseId;
+        }
+      }
+      
+      // Standard session format
+      final baseId = deviceId.split('-session-')[0];
       _log('  Extracted base ID (session format): $baseId');
       return baseId;
     } else if (deviceId.contains('::')) {
-      final baseId = deviceId.split('::').first;
+      final baseId = deviceId.split('::')[0];
       _log('  Extracted base ID (timestamp format): $baseId');
       return baseId;
     }
@@ -902,12 +946,17 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
 
       // Force a refresh of auctions
       if (forceRefresh) {
-        _log('Forcing refresh of auctions');
+        _log('Forcing refresh of auctions from web3Service');
         await web3Service.loadActiveAuctions(forceRefresh: true);
       }
 
-      // Fetch the latest auctions
-      final auctions = await _fetchAuctions();
+      // Update the cached future
+      _log('Refreshing auctions future');
+      await _refreshAuctions();
+      
+      // Pre-fetch the auctions to process them
+      final auctions = await _cachedAuctionsFuture!;
+      _log('Pre-fetched ${auctions.length} auctions for UI update');
 
       if (mounted) {
         setState(() {
@@ -986,8 +1035,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
 
   /// Submit the auction creation form
   Future<void> _submitAuctionForm() async {
-    // Get theme and scaffold messenger for snackbars
-    final theme = Theme.of(context);
+    // Get scaffold messenger for snackbars
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     // Get required form data
@@ -1020,20 +1068,22 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
       final now = DateTime.now();
       final DateTime startTime = now.add(const Duration(minutes: 1));
 
-      _log('Creating auction with device: $deviceId, min bid: $minimumBid, duration: $_selectedSlotDuration minutes, slots: $numSlots');
+      _log('Creating multi-slot auction with device: $deviceId, min bid: $minimumBid, duration: $_selectedSlotDuration minutes, slots: $numSlots');
 
-      // Create auction
-      final result = await web3Service.createAuction(
-        deviceId: deviceId,
+      // Create a MultiSlotAuctionService
+      final multiSlotService = MultiSlotAuctionService(web3Service);
+      
+      // Create multi-slot auction
+      final result = await multiSlotService.createMultiSlotAuction(
+        sessionName: deviceId,
         startTime: startTime,
-        duration: _selectedSlotDuration, // Pass duration in minutes
+        slotDurationMinutes: 5, // Fixed 5-minute slots
+        slotCount: numSlots, // Multiple slots based on total duration
         minimumBid: minimumBid,
-        isUserCreated: true, // Mark as user-created for UI filtering
       );
 
-      _log('Auction creation result: ${result.success}');
+      _log('Multi-slot auction creation result: ${result.success}');
       _log('Result message: ${result.message}');
-      _log('Result data: ${result.data}');
 
       // Reset form
       _deviceIdController.clear();
@@ -1048,72 +1098,24 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
       _log('After loadActiveAuctions - active auctions count: ${web3Service.activeAuctions.length}');
       _log('Active auction keys: ${web3Service.activeAuctions.keys.join(', ')}');
 
-      // Convert activeAuctions map to a list for processing
-      final List<dynamic> auctionsList = [];
-      web3Service.activeAuctions.forEach((key, value) {
-        _log('Processing auction with key: $key, type: ${value.runtimeType}');
-        if (value is Auction) {
-          auctionsList.add(value);
-          _log('Added as Auction object');
-        } else {
-          final mapCopy = Map<String, dynamic>.from(value);
-          if (!mapCopy.containsKey('deviceId')) {
-            mapCopy['deviceId'] = key;
-          }
-          auctionsList.add(mapCopy);
-          _log('Added as Map, keys: ${mapCopy.keys.join(', ')}');
-        }
-      });
-
-      // Process auctions explicitly to ensure all are included
-      _auctions = _processAuctionEntries(auctionsList);
-      _log('Processed ${_auctions.length} auctions after creation');
-      _log('Auction IDs in _auctions: ${_auctions.map((a) => a.deviceId).join(', ')}');
-
-      // If the newly created auction is not in the list, add it manually
-      if (!_auctions.any((a) => a.deviceId == deviceId)) {
-        _log('Newly created auction not found in _auctions list, adding manually');
-        _auctions.add(Auction(
-          deviceId: deviceId,
-          owner: Provider.of<Web3Service>(context, listen: false).currentAddress ?? '0xMockOwnerAddress',
-          startTime: startTime,
-          endTime: startTime.add(Duration(minutes: _selectedSlotDuration)),
-          minimumBid: minimumBid,
-          highestBid: 0.0,
-          highestBidder: '0x0000000000000000000000000000000000000000',
-          isActive: true,
-          isFinalized: false,
-          isUserCreated: true,
-        ));
-        _log('After manual addition, auction count: ${_auctions.length}');
-      }
-
-      // Switch to the active auctions tab and mark loading as complete
-      setState(() {
-        _isLoading = false;
-        _tabController.index = 1; // Switch to active auctions tab
-        _log('Set state: isLoading=$_isLoading, tabIndex=${_tabController.index}');
-      });
-
-      // Show success message
+      // Display success message
       scaffoldMessenger.showSnackBar(
         SnackBar(
-          content: Text('Auction created successfully!'),
-          backgroundColor: theme.colorScheme.primary,
-          duration: const Duration(seconds: 2),
+          content: Text('Successfully created auction with $numSlots slots'),
+          backgroundColor: Colors.green,
         ),
       );
 
-      // Highlight the newly created auction for visual feedback
-      _highlightNewlyCreatedAuction(deviceId);
-
-      // Force another refresh after a short delay to ensure UI is updated
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted) {
-          _log('Starting delayed refresh...');
-          _refreshData();
-        }
+      // Switch to the active auctions tab
+      _tabController.animateTo(1);
+      
+      // Refresh the UI to show new auctions
+      setState(() {
+        _isLoading = false;
       });
+      
+      // Trigger a refresh to update the auctions list
+      _refreshData(forceRefresh: true);
     } catch (e) {
       String errorMessage = 'Failed to create auction: $e';
 
@@ -1171,14 +1173,6 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
       if (web3Service.isMockMode) {
         _log('Mock mode detected, ensuring mock auctions exist');
 
-        // Check if MockAuctionProvider is available
-        try {
-          final mockProvider = Provider.of<MockAuctionProvider>(context, listen: false);
-          _log('MockAuctionProvider found, it has ${mockProvider.auctions.length} auctions');
-        } catch (e) {
-          _log('MockAuctionProvider not available: $e');
-        }
-
         // Get current auctions
         final result = await web3Service.getActiveAuctions();
         _log('Active auctions result: success=${result.success}, count=${result.data?.length ?? 0}');
@@ -1199,7 +1193,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
         } else {
           _log('Mock auctions already exist: ${result.data?.length ?? 0}');
           if (result.data != null) {
-            for (var i = 0; i < result.data!.length; i++) {
+            for (var i = 0; i <result.data!.length; i++) {
               _log('Auction $i: ${result.data![i]}');
             }
           }

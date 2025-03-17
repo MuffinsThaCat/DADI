@@ -66,7 +66,7 @@ class Web3Service extends ChangeNotifier {
   // Initialize mock data when in mock mode
   void _initializeMockData() {
     if (isMockMode) {
-      _log('Initializing mock auction data');
+      _log('Initializing mock auction data - PRESERVING ONLY USER AUCTIONS');
       
       // Ensure we have a current address for mock mode
       if (_currentAddress == null || _currentAddress!.isEmpty) {
@@ -86,69 +86,32 @@ class Web3Service extends ChangeNotifier {
         }
       });
       
-      // Only create test auctions if we have no auctions at all
-      if (_activeAuctions.isEmpty) {
-        _log('No existing auctions found, creating mock test auctions');
-        _createInitialTestAuctions();
-      } else {
-        // Clear existing auctions but reapply user auctions afterward
-        _log('Re-initializing with mock auctions while preserving user auctions');
-        _activeAuctions.clear();
-        _createInitialTestAuctions();
-        
-        // Restore user-created auctions
-        userAuctions.forEach((deviceId, auctionData) {
-          _log('Restoring user-created auction: $deviceId, owner: ${auctionData['owner']}');
-          _activeAuctions[deviceId] = auctionData;
-        });
-      }
+      // Clear existing auctions including any mock ones
+      _log('Clearing all auctions except user-created ones');
+      _activeAuctions.clear();
+      
+      // Restore only user-created auctions
+      userAuctions.forEach((deviceId, auctionData) {
+        _log('Restoring user-created auction: $deviceId, owner: ${auctionData['owner']}');
+        _activeAuctions[deviceId] = auctionData;
+      });
       
       // Always update auction statuses
       _updateAuctionStatus();
-      _log('Mock data initialization complete, ${_activeAuctions.length} auctions available');
+      _log('Mock data initialization complete, ${_activeAuctions.length} user auctions preserved');
       notifyListeners();
     }
   }
 
   // Create initial test auctions for mock mode
   void _createInitialTestAuctions() {
-    _log('Creating initial test auctions for mock mode');
+    _log('Creating initial test auctions has been DISABLED');
     
-    final now = DateTime.now();
+    // Not creating any mock auctions, so users will only see the auctions they create themselves
+    _log('Mock auction creation is completely disabled - you will only see auctions you create yourself');
     
-    // Add auctions with multiple 5-minute sessions for marketplace browsing
-    final String marketDeviceId = 'market-device-1';
-    
-    // Add 6 sequential 5-minute sessions
-    for (int i = 0; i < 6; i++) {
-      final sessionStart = now.add(Duration(minutes: i * 5));
-      final sessionEnd = sessionStart.add(const Duration(minutes: 5));
-      final sessionId = '$marketDeviceId-session-$i';
-      
-      // Calculate highest bid based on session
-      final double highestBidValue = i == 2 ? 0.35 : (i == 4 ? 0.4 : 0.1);
-      
-      final String highestBidder = (i == 2 || i == 4)
-          ? '0xBidder${i}987654321'
-          : '0x0000000000000000000000000000000000000000';
-      
-      _activeAuctions[sessionId] = {
-        'deviceId': sessionId,
-        'owner': '0xMarketOwner987654321', // Different from currentAddress
-        'startTime': sessionStart.toIso8601String(),
-        'endTime': sessionEnd.toIso8601String(),
-        'minimumBid': 0.1, // 0.1 ETH
-        'highestBid': highestBidValue,
-        'highestBidder': highestBidder,
-        'isActive': true,
-        'isFinalized': false,
-        'isUserCreated': false,
-      };
-      
-      _log('Created marketplace session auction: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
-    }
-    
-    _log('Initial test auctions created: ${_activeAuctions.length}');
+    // This method intentionally does nothing to ensure no mock auctions are created
+    return;
   }
 
   void _log(String message, {Object? error}) {
@@ -605,6 +568,8 @@ class Web3Service extends ChangeNotifier {
                 'highestBidder': highestBidder,
                 'isActive': isActive,
                 'isFinalized': isFinalized,
+                'active': isActive,
+                'finalized': isFinalized,
                 'isUserCreated': false,
               };
               
@@ -1111,8 +1076,6 @@ class Web3Service extends ChangeNotifier {
         'highestBid': 0.0,
         'highestBidder': '0x0000000000000000000000000000000000000000',
         'active': true,
-        'isActive': true,  // Include both field name formats
-        'isFinalized': false,  // Include both field name formats
         'finalized': false,
         'isUserCreated': isUserCreated,
       };
@@ -2040,9 +2003,7 @@ class Web3Service extends ChangeNotifier {
       'highestBid': 0.0,
       'highestBidder': '0x0000000000000000000000000000000000000000',
       'active': true,
-      'isActive': true,
       'finalized': false,
-      'isFinalized': false,
       'isUserCreated': true,
     };
     
@@ -2059,36 +2020,28 @@ class Web3Service extends ChangeNotifier {
   /// Force mock mode and create mock auctions
   /// This is especially useful for web environments where mock mode might not be working correctly
   Future<void> forceEnableMockMode() async {
-    _log('Forcing mock mode enabled');
+    _log('Forcing mock mode enabled without creating mock auctions');
     _mockMode = true;
     
-    // Clear any existing auctions to start fresh
+    // We intentionally DO NOT create any mock auctions here
+    // Only preserve any existing user-created auctions
+    Map<String, Map<String, dynamic>> userAuctions = {};
+    _activeAuctions.forEach((deviceId, auctionData) {
+      // Keep auctions that were created by users
+      if (auctionData['isUserCreated'] == true) {
+        _log('Preserving user-created auction: $deviceId, owner: ${auctionData['owner']}');
+        userAuctions[deviceId] = Map.from(auctionData);
+      }
+    });
+    
+    // Clear existing auctions
     _activeAuctions.clear();
     
-    // Initialize with default mock auctions
-    _initializeMockData();
-    
-    // Create an additional mock auction with current timestamp
-    final deviceId = 'mock-device-${DateTime.now().millisecondsSinceEpoch}';
-    _log('Creating additional mock auction with ID: $deviceId');
-    
-    final now = DateTime.now();
-    final endTime = now.add(const Duration(hours: 2));
-    
-    _activeAuctions[deviceId] = {
-      'deviceId': deviceId,
-      'owner': '0xMockOwner${DateTime.now().millisecondsSinceEpoch}',
-      'startTime': now.toIso8601String(),
-      'endTime': endTime.toIso8601String(),
-      'minimumBid': 0.1,
-      'highestBid': 0.0,
-      'highestBidder': '0x0000000000000000000000000000000000000000',
-      'active': true,
-      'isActive': true,
-      'finalized': false,
-      'isFinalized': false,
-      'isUserCreated': true,
-    };
+    // Restore user-created auctions
+    userAuctions.forEach((deviceId, auctionData) {
+      _log('Restoring user-created auction: $deviceId, owner: ${auctionData['owner']}');
+      _activeAuctions[deviceId] = auctionData;
+    });
     
     _log('Mock mode forced enabled, active auctions: ${_activeAuctions.length}');
     _logActiveAuctions('After force enable');
