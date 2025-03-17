@@ -64,6 +64,14 @@ class MultiSlotAuctionService {
           duration: adjustedSlotDurationHours,
           minimumBid: minimumBid,
           isUserCreated: true,
+          // Add session metadata for proper grouping in the creator dashboard
+          additionalData: {
+            'sessionId': sessionId,
+            'sessionName': sessionName,
+            'slotNumber': i,
+            'slotCount': slotCount,
+            'isSession': false,
+          },
         );
         
         if (!result.success) {

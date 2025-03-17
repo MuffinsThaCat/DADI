@@ -65,53 +65,52 @@ class Web3Service extends ChangeNotifier {
   
   // Initialize mock data when in mock mode
   void _initializeMockData() {
-    if (isMockMode) {
-      _log('Initializing mock auction data - PRESERVING ONLY USER AUCTIONS');
-      
-      // Ensure we have a current address for mock mode
-      if (_currentAddress == null || _currentAddress!.isEmpty) {
-        _currentAddress = '0xMockUserAddress123'; // Use a consistent address for the mock user
-        _log('Set consistent mock address: $_currentAddress');
-      }
-      
-      _log('Current active auctions count: ${_activeAuctions.length}');
-      
-      // Save any user-created auctions before initializing
-      Map<String, Map<String, dynamic>> userAuctions = {};
-      _activeAuctions.forEach((deviceId, auctionData) {
-        // Keep auctions that were created by users
-        if (auctionData['isUserCreated'] == true) {
-          _log('Preserving user-created auction: $deviceId, owner: ${auctionData['owner']}');
-          userAuctions[deviceId] = Map.from(auctionData);
-        }
+    _log('Initializing mock data, current active auctions: ${_activeAuctions.length}');
+    _log('Analyzing existing auctions to identify unwanted entries:');
+    
+    // Log details about existing auctions for debugging
+    if (_activeAuctions.isNotEmpty) {
+      _activeAuctions.forEach((key, value) {
+        final isMockDevice = key.toString().startsWith('mock-device-');
+        final isMarketDevice = key.toString().startsWith('market-device-');
+        
+        bool isUserCreated = value['isUserCreated'];
+        
+        final owner = value['owner'];
+        
+        _log('  Auction: $key');
+        _log('    isMockDevice: $isMockDevice');
+        _log('    isMarketDevice: $isMarketDevice');
+        _log('    isUserCreated: $isUserCreated');
+        _log('    owner: $owner');
       });
-      
-      // Clear existing auctions including any mock ones
-      _log('Clearing all auctions except user-created ones');
-      _activeAuctions.clear();
-      
-      // Restore only user-created auctions
-      userAuctions.forEach((deviceId, auctionData) {
-        _log('Restoring user-created auction: $deviceId, owner: ${auctionData['owner']}');
-        _activeAuctions[deviceId] = auctionData;
-      });
-      
-      // Always update auction statuses
-      _updateAuctionStatus();
-      _log('Mock data initialization complete, ${_activeAuctions.length} user auctions preserved');
-      notifyListeners();
     }
-  }
-
-  // Create initial test auctions for mock mode
-  void _createInitialTestAuctions() {
-    _log('Creating initial test auctions has been DISABLED');
     
-    // Not creating any mock auctions, so users will only see the auctions they create themselves
-    _log('Mock auction creation is completely disabled - you will only see auctions you create yourself');
+    // Clean up any unwanted mock auctions from previous sessions
+    final keysToRemove = _activeAuctions.keys.where((key) {
+      final value = _activeAuctions[key];
+      if (value == null) return false;
+      
+      final isMockDevice = key.toString().startsWith('mock-device-');
+      final isMarketDevice = key.toString().startsWith('market-device-');
+      
+      bool isUserCreated = value['isUserCreated'] == true;
+      
+      // Remove any mock or market devices that aren't user-created
+      return (isMockDevice || isMarketDevice) && !isUserCreated;
+    }).toList();
     
-    // This method intentionally does nothing to ensure no mock auctions are created
-    return;
+    // Remove the unwanted auctions
+    if (keysToRemove.isNotEmpty) {
+      _log('Removing ${keysToRemove.length} unwanted mock auctions:');
+      for (final key in keysToRemove) {
+        _log('  Removing: $key');
+        _activeAuctions.remove(key);
+      }
+    }
+    
+    _log('Mock data initialization complete, ${_activeAuctions.length} auctions retained');
+    notifyListeners();
   }
 
   void _log(String message, {Object? error}) {
@@ -336,16 +335,10 @@ class Web3Service extends ChangeNotifier {
     // Initialize mock data
     _initializeMockData();
     
-    // Create a mock auction if there are none
-    if (_activeAuctions.isEmpty) {
-      _log('No active auctions found, creating a mock auction');
-      final result = await createMockAuction();
-      if (result.success) {
-        _log('Successfully created mock auction: ${result.data}');
-      } else {
-        _log('Failed to create mock auction: ${result.message}');
-      }
-    } else {
+    // Don't automatically create mock auctions
+    _log('Not creating any automatic mock auctions on startup');
+    
+    if (_activeAuctions.isNotEmpty) {
       _log('Active auctions already exist, count: ${_activeAuctions.length}');
       _log('Active auction keys: ${_activeAuctions.keys.join(', ')}');
     }
@@ -542,7 +535,7 @@ class Web3Service extends ChangeNotifier {
               final minBid = auctionData[3] as BigInt;
               final highestBidder = auctionData[4];
               final highestBid = auctionData[5] as BigInt;
-              final isActive = auctionData[6] as bool? ?? false;
+              final isActive = auctionData[6] as bool;
               
               // Convert bytes32 to string for device ID
               final String deviceIdStr = _bytesToString(deviceId);
@@ -566,8 +559,6 @@ class Web3Service extends ChangeNotifier {
                 'minimumBid': minBid.toDouble() / 1e18, // Convert to double
                 'highestBid': highestBid.toDouble() / 1e18, // Convert to double
                 'highestBidder': highestBidder,
-                'isActive': isActive,
-                'isFinalized': isFinalized,
                 'active': isActive,
                 'finalized': isFinalized,
                 'isUserCreated': false,
@@ -1019,6 +1010,7 @@ class Web3Service extends ChangeNotifier {
     required int duration,
     required double minimumBid,
     bool isUserCreated = false,
+    Map<String, dynamic>? additionalData,
   }) async {
     _log('Creating auction for device: $deviceId');
     _log('Auction details: startTime=$startTime, duration=$duration, minimumBid=$minimumBid, isUserCreated=$isUserCreated');
@@ -1066,8 +1058,8 @@ class Web3Service extends ChangeNotifier {
       
       _log('Using mock mode for auction creation');
       
-      // Add the auction to our active auctions map
-      _activeAuctions[auctionId] = {
+      // Prepare the auction data
+      Map<String, dynamic> auctionData = {
         'deviceId': auctionId,
         'owner': _currentAddress ?? '0xMockUserAddress123',
         'startTime': startTime.toIso8601String(),
@@ -1079,6 +1071,15 @@ class Web3Service extends ChangeNotifier {
         'finalized': false,
         'isUserCreated': isUserCreated,
       };
+      
+      // Add any additional data if provided
+      if (additionalData != null) {
+        _log('Adding additional data to auction: ${additionalData.keys.join(', ')}');
+        auctionData.addAll(additionalData);
+      }
+      
+      // Add the auction to our active auctions map
+      _activeAuctions[auctionId] = auctionData;
       
       _log('Auction added to _activeAuctions map');
       _log('Current active auctions: ${_activeAuctions.length}');
@@ -1172,10 +1173,10 @@ class Web3Service extends ChangeNotifier {
         'minimumBid': (result[3] as BigInt).toDouble() / 1e18,
         'highestBid': (result[4] as BigInt).toDouble() / 1e18,
         'highestBidder': result[5],
-        'active': result[6] as bool? ?? false,
-        'isActive': result[6] as bool? ?? false,
-        'isFinalized': result[7] as bool? ?? false,
-        'finalized': result[7] as bool? ?? false,
+        'active': result[6] as bool,
+        'isActive': result[6] as bool,
+        'isFinalized': result[7] as bool,
+        'finalized': result[7] as bool,
         'isUserCreated': false,
       };
       
@@ -1249,7 +1250,7 @@ class Web3Service extends ChangeNotifier {
         if (amount <= currentBidDouble) {
           return OperationResult(
             success: false,
-            message: 'Bid must be higher than current highest bid of $currentBidDouble ETH',
+            message: 'Bid must be higher than current highest bid',
           );
         }
         
@@ -1817,8 +1818,8 @@ class Web3Service extends ChangeNotifier {
       final String testDeviceId = 'test-device-${DateTime.now().millisecondsSinceEpoch}';
       
       // Create 6 sequential 5-minute sessions
-      final int sessionCount = 6;
-      final int sessionDurationMinutes = 5;
+      const int sessionCount = 6;
+      const int sessionDurationMinutes = 5;
       
       for (int i = 0; i < sessionCount; i++) {
         final sessionStart = testStartTime.add(Duration(minutes: i * sessionDurationMinutes));
@@ -1826,6 +1827,7 @@ class Web3Service extends ChangeNotifier {
         final sessionId = '$testDeviceId-session-$i';
         
         _activeAuctions[sessionId] = {
+          'deviceId': sessionId,
           'owner': _currentAddress ?? '0xTestOwner123456789',
           'startTime': sessionStart.toIso8601String(),
           'endTime': sessionEnd.toIso8601String(),
@@ -1834,7 +1836,7 @@ class Web3Service extends ChangeNotifier {
           'highestBidder': '0x0000000000000000000000000000000000000000',
           'active': true,
           'finalized': false,
-          'isUserCreated': false,
+          'isUserCreated': true,
         };
         
         _log('Created test auction session: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
@@ -1934,7 +1936,7 @@ class Web3Service extends ChangeNotifier {
       }
       
       // Update active status based on current time
-      final bool wasActive = auctionData['active'] as bool? ?? true;
+      final bool wasActive = auctionData['active'] as bool;
       auctionData['active'] = endTime.isAfter(now);
       auctionData['isActive'] = endTime.isAfter(now);
       
@@ -2069,9 +2071,10 @@ class Web3Service extends ChangeNotifier {
             .entries
             .where((entry) {
               final data = entry.value;
+              
               // Include if active OR if user created (regardless of active status)
-              final isActive = data['active'] ?? data['isActive'] ?? false;
-              final isUserCreated = data['isUserCreated'] ?? false;
+              final isActive = data['active'] as bool;
+              final isUserCreated = data['isUserCreated'] as bool;
               final include = isActive || isUserCreated;
               
               _log('Auction ${entry.key}: isActive=$isActive, isUserCreated=$isUserCreated, include=$include');
@@ -2106,12 +2109,11 @@ class Web3Service extends ChangeNotifier {
                   ? data['minimumBid'] as double 
                   : (data['minBid'] is double ? data['minBid'] as double : 0.0);
                   
-              final highestBid = data['highestBid'] as double? ?? 0.0;
-              
-              final highestBidder = data['highestBidder'] as String? ?? '0x0000000000000000000000000000000000000000';
-              final isActive = data['active'] ?? data['isActive'] ?? true;
-              final isFinalized = data['finalized'] ?? data['isFinalized'] ?? false;
-              final isUserCreated = data['isUserCreated'] as bool? ?? false;
+              final highestBid = data['highestBid'] as double;
+              final highestBidder = data['highestBidder'] as String;
+              final isActive = data['active'] as bool;
+              final isFinalized = data['finalized'] as bool;
+              final isUserCreated = data['isUserCreated'] as bool;
               
               return {
                 'deviceId': entry.key,

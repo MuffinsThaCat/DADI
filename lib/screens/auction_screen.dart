@@ -625,13 +625,58 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
       }
 
       // Process auction entries
-      final auctions = web3Service.activeAuctions;
+      final allAuctions = web3Service.activeAuctions;
+      final userAddress = web3Service.currentAddress?.toLowerCase() ?? '';
+      
+      // Filter auctions to remove mock auctions that weren't created by this user
+      final filteredAuctions = Map.fromEntries(
+        allAuctions.entries.where((entry) {
+          final key = entry.key;
+          
+          // Check if it's a mock device that wasn't created by this user
+          final isMockDevice = key.toString().startsWith('mock-device-');
+          
+          // Get the owner address and check if it matches the current user
+          String ownerAddress = '';
+          bool isUserCreated = false;
+          
+          // Use a completely different approach to avoid type issues
+          try {
+            final dynamic auction = entry.value;
+            
+            // Handle both Auction objects and Map data structures
+            if (auction is Auction) {
+              ownerAddress = auction.owner.toLowerCase();
+              isUserCreated = auction.isUserCreated;
+            } else if (auction is Map) {
+              // Access as Map entries
+              auction.forEach((k, v) {
+                if (k.toString() == 'owner' && v != null) {
+                  ownerAddress = v.toString().toLowerCase();
+                }
+                if (k.toString() == 'isUserCreated' && v == true) {
+                  isUserCreated = true;
+                }
+              });
+            }
+          } catch (e) {
+            _log('Error extracting auction data: $e');
+          }
+          
+          // Include the auction if:
+          // 1. It's explicitly marked as user-created, OR
+          // 2. The user owns it AND it's not a mock device
+          return isUserCreated || (userAddress.isNotEmpty && ownerAddress == userAddress && !isMockDevice);
+        })
+      );
+      
+      _log('Filtered to ${filteredAuctions.length} auctions after removing unwanted mock auctions');
 
       // Convert the Map to a List for processing
       final List<dynamic> auctionsList = [];
 
       // Using a for loop instead of forEach for better control flow
-      for (final entry in auctions.entries) {
+      for (final entry in filteredAuctions.entries) {
         final key = entry.key;
         final value = entry.value;
 
@@ -1163,7 +1208,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
     }
   }
 
-  /// Method to check if we're in mock mode and create mock auctions if needed
+  /// Method to check if we're in mock mode and ensure it's properly setup
   void _checkAndCreateMockAuctions() {
     // Use Future.microtask to avoid calling setState during build
     Future.microtask(() async {
@@ -1171,33 +1216,17 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
 
       _log('Checking for mock mode: ${web3Service.isMockMode}');
       if (web3Service.isMockMode) {
-        _log('Mock mode detected, ensuring mock auctions exist');
+        _log('Mock mode detected, ensuring it is properly setup');
 
-        // Get current auctions
+        // Force enable mock mode (this no longer creates auctions by default)
+        await web3Service.forceEnableMockMode();
+        
+        // Get current auctions (just for logging purposes)
         final result = await web3Service.getActiveAuctions();
         _log('Active auctions result: success=${result.success}, count=${result.data?.length ?? 0}');
 
-        if (!result.success || (result.data?.isEmpty ?? true)) {
-          _log('No active auctions found in mock mode, forcing mock auctions creation');
-          await web3Service.forceEnableMockMode();
-
-          // Try creating a mock auction explicitly
-          final auctionResult = await web3Service.createMockAuction();
-          _log('Mock auction creation result: ${auctionResult.success}');
-
-          // Refresh the UI
-          if (mounted) {
-            _log('Refreshing UI after creating mock auctions');
-            _refreshData();
-          }
-        } else {
-          _log('Mock auctions already exist: ${result.data?.length ?? 0}');
-          if (result.data != null) {
-            for (var i = 0; i <result.data!.length; i++) {
-              _log('Auction $i: ${result.data![i]}');
-            }
-          }
-        }
+        // Note: We no longer automatically create mock auctions
+        // This ensures only user-created auctions appear in the UI
       }
     });
   }
@@ -1481,12 +1510,12 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.of(context).pop(),
                 child: const Text('Close'),
               ),
               TextButton(
                 onPressed: () {
-                  Navigator.pop(context);
+                  Navigator.of(context).pop();
                   web3Service.toggleMockMode();
                   if (mounted) {
                     ScaffoldMessenger.of(currentContext).showSnackBar(
@@ -1510,7 +1539,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
               ),
               TextButton(
                 onPressed: () async {
-                  Navigator.pop(context);
+                  Navigator.of(context).pop();
                   await web3Service.forceEnableMockMode();
 
                   // Refresh the UI
@@ -1540,7 +1569,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
             content: Text('Failed to check network status: $e'),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.of(context).pop(),
                 child: const Text('Close'),
               ),
             ],

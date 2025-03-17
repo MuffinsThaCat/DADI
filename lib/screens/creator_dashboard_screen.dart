@@ -296,7 +296,7 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
     var myAuctions = web3.activeAuctions.entries
         .where((entry) {
           try {
-            // Get the device ID - we want to always include mock device auctions
+            // Get the device ID
             final deviceId = entry.key;
             final isMockDevice = deviceId.toString().startsWith('mock-device-');
             
@@ -316,11 +316,14 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
             developer.log('  isOwner: $isOwner', name: 'CreatorDashboard');
             developer.log('  isUserCreated: $isUserCreated', name: 'CreatorDashboard');
             developer.log('  isMockDevice: $isMockDevice', name: 'CreatorDashboard');
-            developer.log('  include in results: ${isOwner || isUserCreated || isMockDevice}', name: 'CreatorDashboard');
             
-            // Return true if this is the user's auction OR it's specifically marked as user-created
-            // OR it's a mock device auction
-            return isOwner || isUserCreated || isMockDevice;
+            // Only include user-created auctions or ones owned by the current user
+            // Exclude mock device auctions that weren't explicitly created by this user
+            bool includeAuction = isUserCreated || (isOwner && !isMockDevice);
+            
+            developer.log('  include in results: $includeAuction', name: 'CreatorDashboard');
+            
+            return includeAuction;
           } catch (e) {
             developer.log('Error processing auction ${entry.key}: $e', name: 'CreatorDashboard');
             return false;
@@ -393,35 +396,6 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
     
     return Column(
       children: [
-        ElevatedButton.icon(
-          icon: const Icon(Icons.science),
-          label: const Text("Create Test Auction"),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.deepPurple,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-          onPressed: () async {
-            final web3 = Provider.of<Web3Service>(context, listen: false);
-            await web3.createSingleTestAuction();
-            
-            // Refresh UI
-            setState(() {
-              // This will rebuild the UI
-            });
-            
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Test auction created successfully!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 16),
         Expanded(
           child: RefreshIndicator(
             onRefresh: _forceRefreshAuctions,

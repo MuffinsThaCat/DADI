@@ -39,6 +39,7 @@ void main() {
       highestBidder: '0xMockBidder',
       isActive: true,
       isFinalized: false,
+      isUserCreated: true,
     );
     
     // Mock the getAuction method to return the same auction
@@ -101,6 +102,7 @@ void main() {
       highestBidder: '0xMockBidder',
       isActive: true,
       isFinalized: false,
+      isUserCreated: true,
     );
     
     // Mock the getAuction method to return the same auction
@@ -187,6 +189,7 @@ void main() {
       highestBidder: '0xMockBidder',
       isActive: true, // Still active but ended
       isFinalized: false,
+      isUserCreated: true,
     );
     
     // Track if the auction has been finalized in our mock
