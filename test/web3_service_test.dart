@@ -129,6 +129,7 @@ class MockWeb3Service extends ChangeNotifier {
       highestBidder: map['highestBidder'] as String,
       isActive: map['isActive'] as bool,
       isFinalized: map['isFinalized'] as bool,
+      isUserCreated: false, // Add this line
     );
   }
 }

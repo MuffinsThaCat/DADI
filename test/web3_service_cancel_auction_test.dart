@@ -43,6 +43,7 @@ class MockWeb3Service extends ChangeNotifier {
         highestBidder: '0x0000000000000000000000000000000000000000',
         isActive: true,
         isFinalized: false,
+        isUserCreated: true,
       ),
       message: 'Auction created successfully',
     );
@@ -69,6 +70,7 @@ class MockWeb3Service extends ChangeNotifier {
         highestBidder: auction['highestBidder'] as String,
         isActive: auction['active'] as bool,
         isFinalized: auction['finalized'] as bool,
+        isUserCreated: true,
       ),
       message: 'Auction retrieved successfully',
     );

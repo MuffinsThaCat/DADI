@@ -59,6 +59,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
       highestBidder: '0x0000000000000000000000000000000000000000',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
     
     // Auction ending soon
@@ -72,6 +73,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
       highestBidder: '0xMockBidder1',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
     
     // Ended auction
@@ -85,6 +87,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
       highestBidder: '0xMockBidder2',
       isActive: false,
       isFinalized: true,
+      isUserCreated: false,
     );
   }
   
@@ -206,6 +209,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
         highestBidder: result[5],
         isActive: result[6] as bool,
         isFinalized: result[7] as bool,
+        isUserCreated: false,
       );
       
       return OperationResult<Auction>(
@@ -319,6 +323,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
         highestBidder: _currentAddress ?? '0xMockBidder',
         isActive: auction.isActive,
         isFinalized: auction.isFinalized,
+        isUserCreated: auction.isUserCreated,
       );
       
       notifyListeners();
@@ -405,6 +410,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
         highestBidder: auction.highestBidder,
         isActive: false,
         isFinalized: true,
+        isUserCreated: auction.isUserCreated,
       );
       
       notifyListeners();
@@ -446,8 +452,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
     }
   }
   
-  /// Force mock mode and create mock auctions
-  /// This is especially useful for web environments where mock mode might not be working correctly
+  @override
   Future<void> forceEnableMockMode() async {
     _log('Forcing mock mode enabled in Web3ServiceWeb');
     
@@ -475,6 +480,7 @@ class Web3ServiceWeb extends Web3ServiceInterface {
       highestBidder: '0x0000000000000000000000000000000000000000',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
     
     _log('Mock mode forced enabled, active auctions: ${_auctions.length}');

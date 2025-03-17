@@ -5,6 +5,7 @@ import 'package:dadi/services/mock_buttplug_service.dart';
 import 'package:dadi/services/wallet_service_interface.dart';
 import 'package:dadi/services/service_factory.dart';
 import 'package:dadi/services/web3_service.dart';
+import 'package:dadi/services/multi_slot_auction_service.dart';
 import 'package:dadi/providers/meta_transaction_provider.dart';
 import 'package:dadi/providers/mock_auction_provider.dart';
 import 'package:dadi/screens/home_screen_new.dart';
@@ -133,6 +134,9 @@ void main() async {
     trustedForwarderAddress: trustedForwarderAddress,
   )['web3Service'];
   
+  // Create MultiSlotAuctionService
+  final multiSlotAuctionService = MultiSlotAuctionService(web3Service);
+  
   // Enable mock mode for testing
   web3Service.isMockMode = true;
   
@@ -162,7 +166,8 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider<Web3Service>.value(value: web3Service),
-        ChangeNotifierProvider<MockButtplugService>(create: (context) => mockButtplugService),
+        ChangeNotifierProvider<MockButtplugService>.value(value: mockButtplugService),
+        Provider<MultiSlotAuctionService>.value(value: multiSlotAuctionService),
         ChangeNotifierProvider<MetaTransactionProvider>(create: (context) => metaTransactionProvider),
         ChangeNotifierProvider<WalletServiceInterface>(create: (context) => walletService),
         ChangeNotifierProvider<UserRoleProvider>.value(value: userRoleProvider),

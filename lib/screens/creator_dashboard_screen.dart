@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/web3_service.dart';
-import '../services/mock_buttplug_service.dart';
 import '../widgets/wavy_background.dart';
 import 'wallet_screen.dart';
 import 'auction_screen.dart';
 import 'dart:developer' as developer;
 import 'user_auction_browse_screen.dart';
+import '../services/mock_buttplug_service.dart';
 
 class CreatorDashboardScreen extends StatefulWidget {
   const CreatorDashboardScreen({Key? key}) : super(key: key);
@@ -281,36 +281,50 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
     developer.log('************************ DEBUGGING ALL AUCTIONS ************************', name: 'CreatorDashboard');
     web3.activeAuctions.forEach((deviceId, auctionData) {
       developer.log('Auction: $deviceId', name: 'CreatorDashboard');
-      auctionData.forEach((key, value) {
-        developer.log('  $key: $value', name: 'CreatorDashboard');
-      });
+      try {
+        auctionData.forEach((key, value) {
+          developer.log('  $key: $value', name: 'CreatorDashboard');
+        });
+      } catch (e) {
+        developer.log('  Not a map or error accessing data: ${auctionData.runtimeType}', name: 'CreatorDashboard');
+        developer.log('  Error: $e', name: 'CreatorDashboard');
+      }
       developer.log('------------------------------------------------------------------', name: 'CreatorDashboard');
     });
     developer.log('**********************************************************************', name: 'CreatorDashboard');
     
     var myAuctions = web3.activeAuctions.entries
         .where((entry) {
-          String ownerAddress = entry.value['owner']?.toString() ?? '';
-          String currentUserAddress = userAddress?.toString() ?? '';
-          
-          bool isOwner = false;
-          if (ownerAddress.isNotEmpty && currentUserAddress.isNotEmpty) {
-            isOwner = ownerAddress.toLowerCase() == currentUserAddress.toLowerCase();
+          try {
+            // Get the device ID - we want to always include mock device auctions
+            final deviceId = entry.key;
+            final isMockDevice = deviceId.toString().startsWith('mock-device-');
+            
+            var ownerAddress = entry.value['owner']?.toString() ?? '';
+            var isUserCreated = entry.value['isUserCreated'] == true;
+            var currentUserAddress = userAddress?.toString() ?? '';
+            
+            bool isOwner = false;
+            if (ownerAddress.isNotEmpty && currentUserAddress.isNotEmpty) {
+              isOwner = ownerAddress.toLowerCase() == currentUserAddress.toLowerCase();
+            }
+            
+            // Log detailed filtering information
+            developer.log('Filtering auction ${entry.key}:', name: 'CreatorDashboard');
+            developer.log('  owner: $ownerAddress', name: 'CreatorDashboard');
+            developer.log('  currentUser: $currentUserAddress', name: 'CreatorDashboard');
+            developer.log('  isOwner: $isOwner', name: 'CreatorDashboard');
+            developer.log('  isUserCreated: $isUserCreated', name: 'CreatorDashboard');
+            developer.log('  isMockDevice: $isMockDevice', name: 'CreatorDashboard');
+            developer.log('  include in results: ${isOwner || isUserCreated || isMockDevice}', name: 'CreatorDashboard');
+            
+            // Return true if this is the user's auction OR it's specifically marked as user-created
+            // OR it's a mock device auction
+            return isOwner || isUserCreated || isMockDevice;
+          } catch (e) {
+            developer.log('Error processing auction ${entry.key}: $e', name: 'CreatorDashboard');
+            return false;
           }
-          
-          // Check if this is a user-created auction (not a preset)
-          bool isUserCreated = entry.value['isUserCreated'] == true;
-          
-          // Log detailed filtering information
-          developer.log('Filtering auction ${entry.key}:', name: 'CreatorDashboard');
-          developer.log('  owner: $ownerAddress', name: 'CreatorDashboard');
-          developer.log('  currentUser: $currentUserAddress', name: 'CreatorDashboard');
-          developer.log('  isOwner: $isOwner', name: 'CreatorDashboard');
-          developer.log('  isUserCreated: $isUserCreated', name: 'CreatorDashboard');
-          developer.log('  include in results: ${isOwner || isUserCreated}', name: 'CreatorDashboard');
-          
-          // Return true if this is the user's auction OR it's specifically marked as user-created
-          return isOwner || isUserCreated;
         })
         .toList();
     
@@ -323,40 +337,45 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
     }
     
     // Group session auctions - hide the individual 5-minute sessions
-    final Map<String, Map<String, dynamic>> groupedAuctions = {};
+    final Map<String, dynamic> groupedAuctions = {};
     
     for (final entry in myAuctions) {
       String deviceId = entry.key;
-      Map<String, dynamic> auctionData = Map<String, dynamic>.from(entry.value);
       
-      // Check if this is a session auction (has a sessionId)
-      if (auctionData.containsKey('sessionId') && auctionData['sessionId'] != null) {
-        String sessionId = auctionData['sessionId'].toString();
+      try {
+        final auctionData = Map<String, dynamic>.from(entry.value);
         
-        // If we already have a grouping for this session, skip
-        if (groupedAuctions.containsKey(sessionId)) {
-          continue;
+        // Check if this is a session auction (has a sessionId)
+        if (auctionData.containsKey('sessionId') && auctionData['sessionId'] != null) {
+          String sessionId = auctionData['sessionId'].toString();
+          
+          // If we already have a grouping for this session, skip
+          if (groupedAuctions.containsKey(sessionId)) {
+            continue;
+          }
+          
+          // Create a new group entry that represents the session
+          groupedAuctions[sessionId] = {
+            'deviceId': sessionId,
+            'isSession': true,
+            'sessionName': auctionData['sessionName'] ?? 'Session $sessionId',
+            'owner': auctionData['owner'],
+            'active': auctionData['active'] ?? false,
+            'slotCount': myAuctions
+                .where((e) => e.value['sessionId'] == sessionId)
+                .length,
+          };
+        } else {
+          // Not a session auction, add directly
+          groupedAuctions[deviceId] = auctionData;
         }
-        
-        // Create a new group entry that represents the session
-        groupedAuctions[sessionId] = {
-          'deviceId': sessionId,
-          'isSession': true,
-          'sessionName': auctionData['sessionName'] ?? 'Session $sessionId',
-          'owner': auctionData['owner'],
-          'active': auctionData['active'] ?? false,
-          'slotCount': myAuctions
-              .where((e) => e.value['sessionId'] == sessionId)
-              .length,
-        };
-      } else {
-        // Not a session auction, add directly
-        groupedAuctions[deviceId] = auctionData;
+      } catch (e) {
+        developer.log('Error processing auction $deviceId: $e', name: 'CreatorDashboard');
       }
     }
     
     // Filter by auction status if needed
-    final List<MapEntry<String, Map<String, dynamic>>> filteredAuctions;
+    final List<MapEntry<String, dynamic>> filteredAuctions;
     
     if (type == 'all') {
       filteredAuctions = groupedAuctions.entries.toList();
@@ -372,70 +391,105 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
     
     developer.log('Filtered auctions count (type $type): ${filteredAuctions.length}', name: 'CreatorDashboard');
     
-    return RefreshIndicator(
-      onRefresh: _forceRefreshAuctions,
-      child: ListView.builder(
-        itemCount: filteredAuctions.length,
-        itemBuilder: (context, index) {
-          final entry = filteredAuctions[index];
-          final deviceId = entry.key;
-          final auctionData = entry.value;
-          
-          final bool isSession = auctionData['isSession'] == true;
-          final String title = isSession
-              ? auctionData['sessionName'] ?? 'Session $deviceId'
-              : 'Auction $deviceId';
-          
-          final String ownerAddress = auctionData['owner']?.toString() ?? '';
-          final bool ownerMatch = userAddress != null && 
-                                 ownerAddress.isNotEmpty && 
-                                 ownerAddress.toLowerCase() == userAddress.toLowerCase();
-          
-          return Card(
-            margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: ListTile(
-              title: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: TextStyle(
-                        fontWeight: ownerMatch ? FontWeight.bold : FontWeight.normal,
-                      ),
+    return Column(
+      children: [
+        ElevatedButton.icon(
+          icon: const Icon(Icons.science),
+          label: const Text("Create Test Auction"),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.deepPurple,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+          onPressed: () async {
+            final web3 = Provider.of<Web3Service>(context, listen: false);
+            await web3.createSingleTestAuction();
+            
+            // Refresh UI
+            setState(() {
+              // This will rebuild the UI
+            });
+            
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Test auction created successfully!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _forceRefreshAuctions,
+            child: ListView.builder(
+              itemCount: filteredAuctions.length,
+              itemBuilder: (context, index) {
+                final entry = filteredAuctions[index];
+                final deviceId = entry.key;
+                final auctionData = entry.value;
+                
+                final bool isSession = auctionData['isSession'] == true;
+                final String title = isSession
+                    ? auctionData['sessionName'] ?? 'Session $deviceId'
+                    : 'Auction $deviceId';
+                
+                final String ownerAddress = auctionData['owner']?.toString() ?? '';
+                final bool ownerMatch = userAddress != null && 
+                                       ownerAddress.isNotEmpty && 
+                                       ownerAddress.toLowerCase() == userAddress.toLowerCase();
+                
+                return Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: ListTile(
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: TextStyle(
+                              fontWeight: ownerMatch ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                        if (ownerMatch)
+                          Text(
+                            'YOUR AUCTION! ',
+                            style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+                          ),
+                      ],
                     ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Device ID: $deviceId'),
+                        isSession
+                            ? Text('Number of Slots: ${auctionData['slotCount']}')
+                            : Text('Status: ${auctionData['active'] == true ? 'Active' : 'Completed'}'),
+                      ],
+                    ),
+                    trailing: Icon(
+                      isSession
+                          ? Icons.schedule
+                          : auctionData['active'] == true
+                              ? Icons.gavel
+                              : Icons.check_circle,
+                      color: auctionData['active'] == true ? Colors.green : Colors.grey,
+                    ),
+                    onTap: () {
+                      // Handle tapping on an auction
+                      developer.log('Tapped on auction $deviceId', name: 'CreatorDashboard');
+                    },
                   ),
-                  if (ownerMatch)
-                    Text(
-                      'YOUR AUCTION! ',
-                      style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
-                    ),
-                ],
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Device ID: $deviceId'),
-                  isSession
-                      ? Text('Number of Slots: ${auctionData['slotCount']}')
-                      : Text('Status: ${auctionData['active'] == true ? 'Active' : 'Completed'}'),
-                ],
-              ),
-              trailing: Icon(
-                isSession
-                    ? Icons.schedule
-                    : auctionData['active'] == true
-                        ? Icons.gavel
-                        : Icons.check_circle,
-                color: auctionData['active'] == true ? Colors.green : Colors.grey,
-              ),
-              onTap: () {
-                // Handle tapping on an auction
-                developer.log('Tapped on auction $deviceId', name: 'CreatorDashboard');
+                );
               },
             ),
-          );
-        },
-      ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -57,6 +57,7 @@ class MockAuctionProvider extends ChangeNotifier {
         highestBidder: highestBidder,
         isActive: true,
         isFinalized: false,
+        isUserCreated: false,
       ));
       
       _log('Created multi-slot auction: $slotDeviceId from ${slotStartTime.toString()} to ${slotEndTime.toString()}');
@@ -87,6 +88,7 @@ class MockAuctionProvider extends ChangeNotifier {
         highestBidder: highestBidder,
         isActive: true,
         isFinalized: false,
+        isUserCreated: true,
       ));
       
       _log('Created user session auction: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
@@ -117,6 +119,7 @@ class MockAuctionProvider extends ChangeNotifier {
         highestBidder: highestBidder,
         isActive: true,
         isFinalized: false,
+        isUserCreated: false,
       ));
       
       _log('Created marketplace session auction: $sessionId from ${sessionStart.toString()} to ${sessionEnd.toString()}');
@@ -160,6 +163,7 @@ class MockAuctionProvider extends ChangeNotifier {
       highestBidder: '0xMockBidder${DateTime.now().millisecondsSinceEpoch}',
       isActive: auction.isActive,
       isFinalized: auction.isFinalized,
+      isUserCreated: auction.isUserCreated,
     );
     
     notifyListeners();
@@ -194,6 +198,7 @@ class MockAuctionProvider extends ChangeNotifier {
       highestBidder: auction.highestBidder,
       isActive: false,
       isFinalized: true,
+      isUserCreated: auction.isUserCreated,
     );
     
     notifyListeners();
@@ -228,6 +233,7 @@ class MockAuctionProvider extends ChangeNotifier {
       highestBidder: '0x0000000000000000000000000000000000000000',
       isActive: true,
       isFinalized: false,
+      isUserCreated: true,
     ));
     
     notifyListeners();
@@ -254,6 +260,7 @@ class MockAuctionProvider extends ChangeNotifier {
       highestBidder: '0x0000000000000000000000000000000000000000',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     ));
     
     notifyListeners();

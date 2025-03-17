@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'device_control_slot.dart';
 import 'auction_status.dart';
 
@@ -11,6 +12,7 @@ class Auction {
   final String highestBidder;
   final bool isActive;
   final bool isFinalized;
+  final bool isUserCreated;
   final List<DeviceControlSlot> controlSlots;
 
   Auction({
@@ -23,44 +25,97 @@ class Auction {
     this.highestBidder = '',
     required this.isActive,
     required this.isFinalized,
+    required this.isUserCreated,
     List<DeviceControlSlot>? controlSlots,
   }) : controlSlots = controlSlots ?? [];
 
-  // Create from blockchain data
+  /// Create an Auction from blockchain data
   factory Auction.fromBlockchainData(Map<String, dynamic> data) {
-    final startTimeUnix = data['startTime'] is BigInt 
-        ? (data['startTime'] as BigInt).toInt() 
-        : data['startTime'] is DateTime
-            ? (data['startTime'] as DateTime).millisecondsSinceEpoch ~/ 1000
-            : (data['startTime'] as int);
-    
-    final endTimeUnix = data['endTime'] is BigInt 
-        ? (data['endTime'] as BigInt).toInt() 
-        : data['endTime'] is DateTime
-            ? (data['endTime'] as DateTime).millisecondsSinceEpoch ~/ 1000
-            : (data['endTime'] as int);
-    
-    final highestBidWei = data['highestBid'] is BigInt 
-        ? (data['highestBid'] as BigInt) 
-        : BigInt.from(data['highestBid'] as int);
-    
-    // Convert wei to ETH (1 ETH = 10^18 wei)
-    final highestBidEth = highestBidWei.toDouble() / 1e18;
-    
-    return Auction(
-      deviceId: data['deviceId'] is String ? data['deviceId'] : utf8ToHex(data['deviceId']),
-      owner: data['owner'] as String,
-      startTime: DateTime.fromMillisecondsSinceEpoch(startTimeUnix * 1000),
-      endTime: DateTime.fromMillisecondsSinceEpoch(endTimeUnix * 1000),
-      minimumBid: data['minimumBid'] is double 
-          ? data['minimumBid'] 
-          : 0.01, // Default minimum bid if not provided
-      highestBid: highestBidEth,
-      highestBidder: data['highestBidder'] as String,
-      isActive: data['active'] == null ? true : data['active'] as bool,
-      isFinalized: data['finalized'] == null ? false : data['finalized'] as bool,
-      controlSlots: data['controlSlots'] != null ? data['controlSlots'].map((slot) => DeviceControlSlot.fromJson(slot)).toList() : [],
-    );
+    try {
+      // Extract the deviceId
+      final String deviceId = data['deviceId'] as String? ?? 'unknown-device';
+      
+      // Handle various timestamp formats
+      final startTime = data['startTime'] is DateTime
+          ? data['startTime'] as DateTime
+          : data['startTime'] is int
+              ? DateTime.fromMillisecondsSinceEpoch(data['startTime'] as int)
+              : DateTime.now().subtract(const Duration(hours: 1));
+      
+      // Check for endTime in different formats
+      DateTime endTime;
+      if (data['endTime'] is DateTime) {
+        endTime = data['endTime'] as DateTime;
+      } else if (data['endTimeBigInt'] is BigInt) {
+        endTime = DateTime.fromMillisecondsSinceEpoch((data['endTimeBigInt'] as BigInt).toInt() * 1000);
+      } else if (data['endTime'] is BigInt) {
+        endTime = DateTime.fromMillisecondsSinceEpoch((data['endTime'] as BigInt).toInt() * 1000);
+      } else if (data['endTime'] is int) {
+        endTime = DateTime.fromMillisecondsSinceEpoch(data['endTime'] as int);
+      } else {
+        // Default to 1 hour after start if no valid end time
+        endTime = startTime.add(const Duration(hours: 1));
+      }
+      
+      // Extract other auction properties
+      final String owner = data['owner'] as String? ?? '0x0000000000000000000000000000000000000000';
+      
+      // Handle minimum bid in different formats
+      double minimumBid;
+      if (data['minimumBid'] is double) {
+        minimumBid = data['minimumBid'] as double;
+      } else if (data['minBid'] is double) {
+        minimumBid = data['minBid'] as double;
+      } else if (data['minBid'] is BigInt) {
+        minimumBid = (data['minBid'] as BigInt).toDouble() / 1e18;
+      } else if (data['minimumBid'] is BigInt) {
+        minimumBid = (data['minimumBid'] as BigInt).toDouble() / 1e18;
+      } else {
+        minimumBid = 0.1; // Default
+      }
+      
+      // Handle highest bid
+      double highestBid = 0.0;
+      if (data['highestBid'] is double) {
+        highestBid = data['highestBid'] as double;
+      } else if (data['highestBid'] is BigInt) {
+        highestBid = (data['highestBid'] as BigInt).toDouble() / 1e18;
+      } else if (data['highestBid'] is String && (data['highestBid'] as String).isNotEmpty) {
+        highestBid = double.tryParse(data['highestBid'] as String) ?? 0.0;
+      }
+      
+      // Handle bidder
+      final String highestBidder = data['highestBidder'] as String? ?? '0x0000000000000000000000000000000000000000';
+      
+      // Handle auction status
+      final bool isActive = data['active'] as bool? ?? true;
+      final bool isFinalized = data['finalized'] as bool? ?? false;
+      
+      // Explicitly check for user created flag
+      final bool isUserCreated = data['isUserCreated'] as bool? ?? false;
+      
+      // Print debug info for this auction
+      developer.log('Auction.fromBlockchainData: deviceId=$deviceId, isUserCreated=$isUserCreated, active=$isActive');
+      
+      return Auction(
+        deviceId: deviceId,
+        startTime: startTime,
+        endTime: endTime,
+        owner: owner,
+        minimumBid: minimumBid,
+        highestBid: highestBid,
+        highestBidder: highestBidder,
+        isActive: isActive,
+        isFinalized: isFinalized,
+        isUserCreated: isUserCreated, // Make sure we set the user created flag
+        controlSlots: data['controlSlots'] != null ? data['controlSlots'].map((slot) => DeviceControlSlot.fromJson(slot)).toList() : [],
+      );
+    } catch (e) {
+      // If anything goes wrong, throw a more descriptive error
+      developer.log('Error creating Auction.fromBlockchainData: $e');
+      developer.log('Data received: ${data.toString()}');
+      rethrow;
+    }
   }
 
   // Helper to convert bytes32 to string
@@ -157,6 +212,7 @@ class Auction {
     String? highestBidder,
     bool? isActive,
     bool? isFinalized,
+    bool? isUserCreated,
     List<DeviceControlSlot>? controlSlots,
   }) {
     return Auction(
@@ -169,6 +225,7 @@ class Auction {
       highestBidder: highestBidder ?? this.highestBidder,
       isActive: isActive ?? this.isActive,
       isFinalized: isFinalized ?? this.isFinalized,
+      isUserCreated: isUserCreated ?? this.isUserCreated,
       controlSlots: controlSlots ?? this.controlSlots,
     );
   }
@@ -177,6 +234,6 @@ class Auction {
   String toString() {
     return 'Auction{deviceId: $deviceId, owner: $owner, startTime: $startTime, endTime: $endTime, '
            'minimumBid: $minimumBid, highestBid: $highestBid, highestBidder: $highestBidder, '
-           'isActive: $isActive, isFinalized: $isFinalized, controlSlots: $controlSlots}';
+           'isActive: $isActive, isFinalized: $isFinalized, isUserCreated: $isUserCreated, controlSlots: $controlSlots}';
   }
 }

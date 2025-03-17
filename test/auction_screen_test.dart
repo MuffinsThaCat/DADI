@@ -99,6 +99,7 @@ class MockWeb3Service extends ChangeNotifier {
       highestBidder: 'Test Bidder',
       isActive: auction.isActive,
       isFinalized: auction.isFinalized,
+      isUserCreated: auction.isUserCreated,
     );
     
     notifyListeners();
@@ -144,6 +145,7 @@ class MockWeb3Service extends ChangeNotifier {
       highestBidder: auction.highestBidder,
       isActive: false,
       isFinalized: true,
+      isUserCreated: auction.isUserCreated,
     );
     
     notifyListeners();
@@ -201,6 +203,7 @@ void main() {
       highestBidder: '',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     ));
   });
 

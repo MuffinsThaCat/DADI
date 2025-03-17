@@ -92,7 +92,7 @@ void main() {
       await web3Service.createAuction(
         deviceId: 'existing-device',
         startTime: DateTime.now(),
-        duration: const Duration(hours: 1),
+        duration: 1, // Use int hours instead of Duration
         minimumBid: 0.1,
       );
       

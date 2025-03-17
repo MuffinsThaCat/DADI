@@ -30,6 +30,7 @@ class MockWeb3Service with ChangeNotifier implements Web3ServiceInterface {
       highestBidder: '0x0000000000000000000000000000000000000000',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
     
     // Auction ending soon
@@ -43,6 +44,7 @@ class MockWeb3Service with ChangeNotifier implements Web3ServiceInterface {
       highestBidder: '0xMockBidder1',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
   }
   
@@ -130,6 +132,7 @@ class MockWeb3Service with ChangeNotifier implements Web3ServiceInterface {
       highestBidder: '0xMockBidder',
       isActive: auction.isActive,
       isFinalized: auction.isFinalized,
+      isUserCreated: auction.isUserCreated,
     );
     
     notifyListeners();
@@ -169,6 +172,7 @@ class MockWeb3Service with ChangeNotifier implements Web3ServiceInterface {
       highestBidder: auction.highestBidder,
       isActive: false,
       isFinalized: true,
+      isUserCreated: auction.isUserCreated,
     );
     
     notifyListeners();

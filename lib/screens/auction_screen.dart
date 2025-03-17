@@ -6,13 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/auction.dart';
-import '../providers/mock_auction_provider.dart';
 import '../providers/meta_transaction_provider.dart';
+import '../providers/mock_auction_provider.dart';
+import '../services/navigation_service.dart';
 import '../services/web3_service.dart';
-import '../services/mock_buttplug_service.dart';
 import '../widgets/wavy_background.dart';
-import '../widgets/slot_duration_selector.dart';
-import '../screens/creator_dashboard_screen.dart';
 
 class AuctionScreen extends StatefulWidget {
   final int initialTab;
@@ -32,85 +30,119 @@ class AuctionScreen extends StatefulWidget {
   State<AuctionScreen> createState() => _AuctionScreenState();
 }
 
-class _AuctionScreenState extends State<AuctionScreen> {
+class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
   List<Auction> _auctions = [];
+  bool _isRefreshing = false;
   bool _isLoading = false;
-  String? _errorMessage;
-  String _loadingMessage = 'Loading...';
-  final _auctionsScrollController = ScrollController();
-  final _formKey = GlobalKey<FormState>();
-
-  // Auction creation form fields
-  TextEditingController _deviceIdController = TextEditingController();
-  TextEditingController _startTimeController = TextEditingController();
-  TextEditingController _durationController = TextEditingController();
-  TextEditingController _minimumBidController = TextEditingController();
-  TextEditingController _numSlotsController = TextEditingController();
-  TextEditingController _slotDurationController = TextEditingController();
-
-  DateTime _selectedStartTime = DateTime.now().add(const Duration(minutes: 5));
-  List<Map<String, dynamic>> _pendingTransactions = [];
-  final Set<String> _shownCompletionNotifications = {};
-  int _selectedSlotDuration = 15; // Default to 15 minutes
+  final TextEditingController _deviceIdController = TextEditingController();
+  final TextEditingController _minimumBidController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final List<int> _slotDurations = [15, 30, 45, 60, 90, 120, 240]; // In minutes
+  int _selectedSlotDuration = 60; // Default: 1 hour
+  final List<Map<String, dynamic>> _pendingTransactions = [];
 
   // Initialize controllers and fetch auctions
   @override
   void initState() {
     super.initState();
-    _log('AuctionScreen initState');
-
-    // Initialize date and time picker with current time + 5 minutes
-    _selectedStartTime = DateTime.now().add(const Duration(minutes: 5));
-    _startTimeController.text = _selectedStartTime.toIso8601String().substring(0, 16);
-    
-    // Set default values
+    _log('AuctionScreen - initState');
+    // Set default value
     _minimumBidController.text = '0.01';
-    _durationController.text = '60';
-    _slotDurationController.text = '5';
-    _numSlotsController.text = '12';
     _deviceIdController.text = 'device-${DateTime.now().millisecondsSinceEpoch}';
-    
-    // Fetch initial auctions
-    _fetchAuctions(context.read<Web3Service>());
-    
+
+    // Create TabController
+    _tabController = TabController(
+      length: 2,
+      vsync: this,
+      initialIndex: widget.deviceId != null ? 1 : widget.initialTab,
+    );
+
+    // Add listener to TabController
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging || _tabController.animation!.value % 1 == 0) {
+        // Check which tab is selected
+        final selectedTab = _tabController.index;
+
+        // If active auctions tab is selected, refresh data
+        if (selectedTab == 1) {
+          _log('Switched to Active Auctions tab, refreshing data');
+
+          // Refresh data when switching to the active auctions tab
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _refreshData(forceRefresh: true);
+            }
+          });
+        }
+      }
+    });
+
+    // Set up timer to refresh auction data
+    Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _refreshData();
+      }
+    });
+
     // Update any pending transactions
     _updatePendingTransactions();
-    
-    // Check if mock auctions should be created
+
+    // Force check for mock auctions at startup
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _log('AuctionScreen - post frame callback');
       _checkAndCreateMockAuctions();
+      _refreshData();
     });
   }
 
   void _updatePendingTransactions() {
-    final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
-    setState(() {
-      // Only track transactions that are still in progress
-      _pendingTransactions = metaTxProvider.transactions
-          .where((tx) => tx.status == MetaTransactionStatus.submitted || tx.status == MetaTransactionStatus.processing)
-          .map((tx) => {'id': tx.id, 'status': tx.status})
-          .toList();
-    });
+    try {
+      final metaTxProvider = Provider.of<MetaTransactionProvider>(
+        NavigationService.navigatorKey.currentContext!,
+        listen: false,
+      );
 
-    // If there are any newly confirmed or failed transactions, show a brief toast
-    final recentlyCompleted = metaTxProvider.transactions
-        .where((tx) => (tx.status == MetaTransactionStatus.confirmed || tx.status == MetaTransactionStatus.failed) &&
-            DateTime.now().difference(tx.timestamp).inMinutes < 2)
-        .toList();
+      // Collect all pending transactions
+      List<Map<String, dynamic>> pendingTx = [];
 
-    for (final tx in recentlyCompleted) {
-      if (!_shownCompletionNotifications.contains(tx.id)) {
-        _shownCompletionNotifications.add(tx.id);
+      for (var tx in metaTxProvider.transactions) {
+        if (tx.status == MetaTransactionStatus.submitted ||
+            tx.status == MetaTransactionStatus.processing) {
+          pendingTx.add({
+            'id': tx.id,
+            'description': tx.description,
+            'timestamp': tx.timestamp,
+          });
+        }
+      }
 
-        // Show a brief toast for the completed transaction
+      // Replace the list contents
+      _pendingTransactions.clear();
+      _pendingTransactions.addAll(pendingTx);
+
+      // Check for completed transactions to notify users
+      for (var tx in metaTxProvider.transactions) {
+        if (tx.status == MetaTransactionStatus.confirmed &&
+            !_pendingTransactions.any((t) => t['id'] == tx.id)) {
+          // Show notification for this completed transaction
+          _showTransactionCompleteNotification(tx.id, tx.description);
+        }
+      }
+    } catch (e) {
+      _log('Error updating transaction status: $e');
+    }
+  }
+
+  /// Show notification for completed transaction
+  void _showTransactionCompleteNotification(String id, String description) {
+    try {
+      final context = NavigationService.navigatorKey.currentContext;
+      if (context != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              tx.status == MetaTransactionStatus.confirmed
-                  ? 'Transaction completed: ${tx.description}'
-                  : 'Transaction failed: ${tx.description}',
-            ),
-            backgroundColor: tx.status == MetaTransactionStatus.confirmed ? Colors.green : Colors.red,
+            content: Text('Transaction completed: $description'),
+            backgroundColor: Colors.green,
             duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
             margin: const EdgeInsets.all(8),
@@ -120,88 +152,23 @@ class _AuctionScreenState extends State<AuctionScreen> {
           ),
         );
       }
+    } catch (e) {
+      _log('Error showing notification: $e');
     }
-  }
-
-  // Method to scroll to the highlighted auction
-  void _scrollToHighlightedAuction() {
-    if (widget.deviceId == null) return;
-
-    // Delay to ensure the list is built
-    Future.delayed(const Duration(milliseconds: 500), () {
-      final web3 = Provider.of<Web3Service>(context, listen: false);
-      final auctions = web3.activeAuctions;
-
-      // Find the index of the auction with the matching deviceId
-      final auctionsList = auctions.keys.toList();
-      final index = auctionsList.indexOf(widget.deviceId!);
-
-      if (index != -1 && _auctionsScrollController.hasClients) {
-        // Calculate the position to scroll to
-        final itemHeight = 200.0; // Approximate height of each auction card
-        final offset = index * itemHeight;
-
-        // Scroll to the position
-        _auctionsScrollController.animateTo(
-          offset,
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.easeInOut,
-        );
-      }
-    });
-  }
-
-  /// Check if we're in mock mode and create mock auctions if needed
-  void _checkAndCreateMockAuctions() {
-    // Use Future.microtask to avoid calling setState during build
-    Future.microtask(() async {
-      final web3Service = context.read<Web3Service>();
-
-      if (web3Service.isMockMode) {
-        _log('Mock mode detected, ensuring mock auctions exist');
-
-        // Get current auctions
-        final result = await web3Service.getActiveAuctions();
-
-        if (!result.success || (result.data?.isEmpty ?? true)) {
-          _log('No active auctions found in mock mode, forcing mock auctions creation');
-          await web3Service.forceEnableMockMode();
-
-          // Refresh the UI
-          if (mounted) {
-            _refreshData();
-          }
-        } else {
-          _log('Mock auctions already exist: ${result.data?.length ?? 0}');
-        }
-      }
-    });
   }
 
   @override
   void dispose() {
     _deviceIdController.dispose();
-    _startTimeController.dispose();
-    _durationController.dispose();
     _minimumBidController.dispose();
-    _numSlotsController.dispose();
-    _slotDurationController.dispose();
-    _auctionsScrollController.dispose();
+    _tabController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final web3 = Provider.of<Web3Service>(context);
-    final buttplug = Provider.of<MockButtplugService>(context);
-    final metaTxProvider = Provider.of<MetaTransactionProvider>(context);
-
-    // Update pending transactions when provider changes
-    if (_pendingTransactions.length != metaTxProvider.transactions
-        .where((tx) => tx.status == MetaTransactionStatus.submitted || tx.status == MetaTransactionStatus.processing)
-        .length) {
-      _updatePendingTransactions();
-    }
+    final web3 = context.watch<Web3Service>();
 
     return DefaultTabController(
       length: 2,
@@ -258,8 +225,9 @@ class _AuctionScreenState extends State<AuctionScreen> {
 
             // Main content
             TabBarView(
+              controller: _tabController,
               children: [
-                _buildCreateAuctionTab(web3, buttplug),
+                _buildCreateAuctionTab(),
                 _buildActiveAuctionsTab(),
               ],
             ),
@@ -276,9 +244,9 @@ class _AuctionScreenState extends State<AuctionScreen> {
                         valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                       const SizedBox(height: 16),
-                      Text(
-                        _loadingMessage,
-                        style: const TextStyle(
+                      const Text(
+                        'Loading...',
+                        style: TextStyle(
                           color: Colors.white,
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
@@ -294,878 +262,399 @@ class _AuctionScreenState extends State<AuctionScreen> {
     );
   }
 
-  Widget _buildCreateAuctionTab(Web3Service web3, MockButtplugService buttplug) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            DropdownButtonFormField<String>(
-              decoration: const InputDecoration(
-                labelText: 'Select Device',
-                border: OutlineInputBorder(),
+  Widget _buildCreateAuctionTab() {
+    return Stack(
+      children: [
+        if (kIsWeb)
+          // Background only on web to avoid mobile performance issues
+          const WavyBackground(
+            primaryColor: Color(0xFF6200EE),
+            secondaryColor: Color(0xFF03DAC6),
+            child: SizedBox.expand(),
+          ),
+        SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Create New Auction',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
               ),
-              value: buttplug.currentDevice,
-              items: ['Mock Device 1', 'Mock Device 2', 'Mock Device 3']
-                  .map((device) => DropdownMenuItem(
-                        value: device,
-                        child: Text(device),
-                      ))
-                  .toList(),
-              onChanged: (value) async {
-                if (value != null) {
-                  await buttplug.connectToDevice(value);
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _startTimeController,
-              decoration: const InputDecoration(
-                labelText: 'Start Time',
-                hintText: 'YYYY-MM-DD HH:MM',
-              ),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter a start time';
-                }
-                try {
-                  DateTime.parse(value);
+              const SizedBox(height: 24),
+              // Device ID field
+              TextFormField(
+                controller: _deviceIdController,
+                decoration: const InputDecoration(
+                  labelText: 'Device ID',
+                  hintText: 'Enter device ID',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter a device ID';
+                  }
                   return null;
-                } catch (e) {
-                  return 'Invalid date format';
-                }
-              },
-              onChanged: (value) {
-                try {
-                  _selectedStartTime = DateTime.parse(value);
-                } catch (e) {
-                  // Invalid date format, ignore
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            SlotDurationSelector(
-              onDurationSelected: _onSlotDurationSelected,
-              selectedDuration: _selectedSlotDuration,
-              totalDurationMinutes: int.tryParse(_durationController.text) ?? 60,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              decoration: const InputDecoration(
-                labelText: 'Minimum Bid (ETH)',
-                border: OutlineInputBorder(),
+                },
               ),
-              controller: _minimumBidController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter a minimum bid';
-                }
-                if (double.tryParse(value) == null) {
-                  return 'Please enter a valid number';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _isLoading
-                  ? null
-                  : () async {
-                      if (_formKey.currentState!.validate()) {
-                        setState(() {
-                          _isLoading = true;
-                          _errorMessage = '';
-                        });
+              const SizedBox(height: 16),
 
-                        try {
-                          // Check if web3 is connected
-                          if (!web3.isConnected) {
-                            throw Exception('Wallet not connected. Please connect your wallet first.');
-                          }
+              // Minimum bid field
+              TextFormField(
+                controller: _minimumBidController,
+                decoration: const InputDecoration(
+                  labelText: 'Minimum Bid (ETH)',
+                  hintText: 'Enter minimum bid amount',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter a minimum bid';
+                  }
+                  try {
+                    final bid = double.parse(value);
+                    if (bid <= 0) {
+                      return 'Minimum bid must be greater than 0';
+                    }
+                  } catch (e) {
+                    return 'Please enter a valid number';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
 
-                          // Check if contract is initialized
-                          if (!web3.isContractInitialized) {
-                            await web3.initializeContract();
-                            if (!web3.isContractInitialized) {
-                              throw Exception('Failed to initialize contract. Please try again.');
-                            }
-                          }
+              // Slot duration dropdown
+              DropdownButtonFormField<int>(
+                decoration: const InputDecoration(
+                  labelText: 'Auction Duration',
+                  border: OutlineInputBorder(),
+                ),
+                value: _selectedSlotDuration,
+                items: _slotDurations.map((duration) {
+                  // Calculate number of 5-minute slots for this duration
+                  final numSlots = duration ~/ 5;
+                  return DropdownMenuItem<int>(
+                    value: duration,
+                    child: Text('$duration minutes ($numSlots slots)'),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    if (value != null) {
+                      _selectedSlotDuration = value;
+                    }
+                  });
+                },
+                validator: (value) {
+                  if (value == null) {
+                    return 'Please select an auction duration';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 8),
 
-                          // Validate contract with a test call
-                          bool isValid = await web3.testContract();
-                          if (!isValid) {
-                            _errorMessage = 'Contract validation failed. Please check your connection and try again.';
-                            _isLoading = false;
-                            if (mounted) {
-                              setState(() {});
-                            }
-                            return;
-                          }
+              // Slot duration explanation
+              const Text(
+                'Each slot represents a 5-minute time period for bidding.',
+                style: TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
+              ),
+              const SizedBox(height: 24),
 
-                          final deviceId = _deviceIdController.text;
-                          if (deviceId.isEmpty) {
-                            // Use a mock device ID if no device is selected
-                            final mockDeviceId = 'mock-device-${DateTime.now().millisecondsSinceEpoch}';
-                            _log('No device selected, using mock device ID: $mockDeviceId');
-
-                            // Convert form values to appropriate types
-                            final minBidEth = double.parse(_minimumBidController.text);
-                            final duration = _selectedSlotDuration;
-
-                            _log('Creating auction with params:');
-                            _log('Device ID: $mockDeviceId');
-                            _log('Start Time: $_selectedStartTime');
-                            _log('Duration: $duration minutes');
-                            _log('Min Bid: $minBidEth ETH');
-
-                            // Call the contract method
-                            try {
-                              if (kIsWeb) {
-                                // Use MockAuctionProvider for web
-                                final mockAuctionProvider = context.read<MockAuctionProvider?>();
-                                final web3 = Provider.of<Web3Service>(context, listen: false);
-                                
-                                if (mockAuctionProvider != null) {
-                                  _log('Using MockAuctionProvider for web to create auction');
-                                  final success = await mockAuctionProvider.createAuction(
-                                    deviceId: mockDeviceId,
-                                    startTime: _selectedStartTime,
-                                    duration: Duration(minutes: duration),
-                                    minimumBid: minBidEth,
-                                  );
-
-                                  if (mounted) {
-                                    if (success) {
-                                      _log('✅ AUCTION CREATION SUCCESSFUL via MockAuctionProvider');
-                                      
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Auction created successfully!'),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                      
-                                      // Force refresh auctions and log the results
-                                      _log('🔄 Force refreshing auctions after creation');
-                                      await web3.loadActiveAuctions(forceRefresh: true);
-                                      
-                                      // IMPORTANT: After refreshing, make sure the user auction is still there
-                                      if (!web3.activeAuctions.containsKey(mockDeviceId)) {
-                                        _log('‼️ WARNING: User auction was lost after refresh, re-adding it');
-                                        // Re-add the auction to ensure it's displayed
-                                        web3.addAuctionDirectly(
-                                          deviceId: mockDeviceId,
-                                          auctionData: {
-                                            'deviceId': mockDeviceId,
-                                            'owner': web3.currentAddress,
-                                            'startTime': _selectedStartTime,
-                                            'endTime': BigInt.from(_selectedStartTime.add(Duration(minutes: duration)).millisecondsSinceEpoch ~/ 1000),
-                                            'minimumBid': minBidEth,
-                                            'highestBid': BigInt.from(0),
-                                            'highestBidder': '0x0000000000000000000000000000000000000000',
-                                            'active': true,
-                                            'finalized': false,
-                                            'isUserCreated': true,
-                                          },
-                                        );
-                                        _log('✅ Re-added user auction: $mockDeviceId');
-                                      }
-                                      
-                                      _log('📊 Auctions after refresh: ${web3.activeAuctions.length}');
-                                      web3.activeAuctions.forEach((id, data) {
-                                        _log('  Auction: $id, Owner: ${data['owner']}, isUserCreated: ${data['isUserCreated']}');
-                                      });
-                                      
-                                      // Navigate directly to the dashboard after creating an auction
-                                      if (mounted) {
-                                        Navigator.of(context).pushAndRemoveUntil(
-                                          MaterialPageRoute(
-                                            builder: (context) => const CreatorDashboardScreen(),
-                                          ),
-                                          (route) => false,
-                                        );
-                                      }
-                                    } else {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: const Text('Failed to create auction. Device ID may already exist.'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  }
-                                } else {
-                                  // Fall back to Web3Service
-                                  final result = await web3.createAuction(
-                                    deviceId: mockDeviceId,
-                                    startTime: _selectedStartTime,
-                                    duration: Duration(minutes: duration),
-                                    minimumBid: minBidEth,
-                                    isUserCreated: true,  // Mark as user-created auction
-                                  );
-                                  
-                                  _log('Auction creation result: ${result.success}');
-                                  
-                                  if (result.success) {
-                                    _log('🔄 Force refreshing auctions after creation (fallback path)');
-                                    await web3.loadActiveAuctions(forceRefresh: true);
-                                  }
-                                  
-                                  // Debug after creation - show all active auctions
-                                  _log('----AFTER AUCTION CREATION----');
-                                  _log('User address: ${web3.currentAddress}');
-                                  _log('Total auctions: ${web3.activeAuctions.length}');
-                                  
-                                  web3.activeAuctions.forEach((key, value) {
-                                    _log('  Auction: $key');
-                                    _log('    Owner: ${value['owner']}');
-                                    _log('    isUserCreated: ${value['isUserCreated']}');
-                                    _log('    Is Owner Current User? ${value['owner'] == web3.currentAddress}');
-                                  });
-                                  
-                                  if (mounted) {
-                                    if (result.success) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Auction created successfully!'),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                      
-                                      // Navigate directly to the dashboard after creating an auction
-                                      if (mounted) {
-                                        Navigator.of(context).pushAndRemoveUntil(
-                                          MaterialPageRoute(
-                                            builder: (context) => const CreatorDashboardScreen(),
-                                          ),
-                                          (route) => false,
-                                        );
-                                      }
-                                    } else {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(result.message),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  }
-                                }
-                              } else {
-                                // Use Web3Service for non-web platforms
-                                final web3 = Provider.of<Web3Service>(context, listen: false);
-                                final result = await web3.createAuction(
-                                  deviceId: mockDeviceId,
-                                  startTime: _selectedStartTime,
-                                  duration: Duration(minutes: duration),
-                                  minimumBid: minBidEth,
-                                );
-                                
-                                _log('Non-web platform: Created auction via Web3Service');
-                                _log('Result success: ${result.success}');
-                                
-                                // Force refresh the auctions list to ensure the dashboard shows the new auction
-                                await web3.loadActiveAuctions(forceRefresh: true);
-                                
-                                // Log all auctions after refresh
-                                _log('All auctions after refresh:');
-                                web3.activeAuctions.forEach((key, value) {
-                                  _log('  Auction: $key, Owner: ${value['owner']}, isUserCreated: ${value['isUserCreated']}');
-                                });
-                                
-                                if (mounted) {
-                                  if (result.success) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Auction created successfully!'),
-                                        backgroundColor: Colors.green,
-                                      ),
-                                    );
-                                    
-                                    // Navigate directly to the dashboard after creating an auction
-                                    if (mounted) {
-                                      Navigator.of(context).pushAndRemoveUntil(
-                                        MaterialPageRoute(
-                                          builder: (context) => const CreatorDashboardScreen(),
-                                        ),
-                                        (route) => false,
-                                      );
-                                    }
-                                  } else {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(result.message),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
-                                  }
-                                }
-                              }
-                            } catch (e) {
-                              _log('ERROR during auction creation: $e');
-                              handleAuctionCreationError(e);
-                            }
-                          } else {
-                            // Original code for when a device is selected
-                            // Convert form values to appropriate types
-                            final minBidEth = double.parse(_minimumBidController.text);
-                            final duration = _selectedSlotDuration;
-
-                            _log('Creating auction with params:');
-                            _log('Device ID: $deviceId');
-                            _log('Start Time: $_selectedStartTime');
-                            _log('Duration: $duration minutes');
-                            _log('Min Bid: $minBidEth ETH');
-
-                            // Call the contract method
-                            try {
-                              if (kIsWeb) {
-                                // Use MockAuctionProvider for web
-                                final mockAuctionProvider = context.read<MockAuctionProvider?>();
-                                final web3 = Provider.of<Web3Service>(context, listen: false);
-                                
-                                if (mockAuctionProvider != null) {
-                                  _log('Using MockAuctionProvider for web to create auction');
-                                  final success = await mockAuctionProvider.createAuction(
-                                    deviceId: deviceId,
-                                    startTime: _selectedStartTime,
-                                    duration: Duration(minutes: duration),
-                                    minimumBid: minBidEth,
-                                  );
-
-                                  if (mounted) {
-                                    if (success) {
-                                      _log('✅ AUCTION CREATION SUCCESSFUL via MockAuctionProvider');
-                                      
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Auction created successfully!'),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                      
-                                      // Force refresh auctions and log the results
-                                      _log('🔄 Force refreshing auctions after creation');
-                                      await web3.loadActiveAuctions(forceRefresh: true);
-                                      
-                                      // IMPORTANT: After refreshing, make sure the user auction is still there
-                                      if (!web3.activeAuctions.containsKey(deviceId)) {
-                                        _log('‼️ WARNING: User auction was lost after refresh, re-adding it');
-                                        // Re-add the auction to ensure it's displayed
-                                        web3.addAuctionDirectly(
-                                          deviceId: deviceId,
-                                          auctionData: {
-                                            'deviceId': deviceId,
-                                            'owner': web3.currentAddress,
-                                            'startTime': _selectedStartTime,
-                                            'endTime': BigInt.from(_selectedStartTime.add(Duration(minutes: duration)).millisecondsSinceEpoch ~/ 1000),
-                                            'minimumBid': minBidEth,
-                                            'highestBid': BigInt.from(0),
-                                            'highestBidder': '0x0000000000000000000000000000000000000000',
-                                            'active': true,
-                                            'finalized': false,
-                                            'isUserCreated': true,
-                                          },
-                                        );
-                                        _log('✅ Re-added user auction: $deviceId');
-                                      }
-                                      
-                                      _log('📊 Auctions after refresh: ${web3.activeAuctions.length}');
-                                      web3.activeAuctions.forEach((id, data) {
-                                        _log('  Auction: $id, Owner: ${data['owner']}, isUserCreated: ${data['isUserCreated']}');
-                                      });
-                                      
-                                      // Navigate directly to the dashboard after creating an auction
-                                      if (mounted) {
-                                        Navigator.of(context).pushAndRemoveUntil(
-                                          MaterialPageRoute(
-                                            builder: (context) => const CreatorDashboardScreen(),
-                                          ),
-                                          (route) => false,
-                                        );
-                                      }
-                                    } else {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: const Text('Failed to create auction. Device ID may already exist.'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  }
-                                } else {
-                                  // Fall back to Web3Service
-                                  final result = await web3.createAuction(
-                                    deviceId: deviceId,
-                                    startTime: _selectedStartTime,
-                                    duration: Duration(minutes: duration),
-                                    minimumBid: minBidEth,
-                                  );
-                                  
-                                  _log('Auction creation result: ${result.success}');
-                                  
-                                  // Debug after creation - show all active auctions
-                                  _log('----AFTER AUCTION CREATION----');
-                                  _log('User address: ${web3.currentAddress}');
-                                  _log('Total auctions: ${web3.activeAuctions.length}');
-                                  
-                                  web3.activeAuctions.forEach((key, value) {
-                                    _log('  Auction: $key');
-                                    _log('    Owner: ${value['owner']}');
-                                    _log('    Is Owner Current User? ${value['owner'] == web3.currentAddress}');
-                                  });
-                                  
-                                  if (mounted) {
-                                    if (result.success) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Auction created successfully!'),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                      
-                                      // Force refresh the auctions list to ensure the dashboard shows the new auction
-                                      await web3.loadActiveAuctions(forceRefresh: true);
-                                      
-                                      // Navigate directly to the dashboard after creating an auction
-                                      if (mounted) {
-                                        Navigator.of(context).pushAndRemoveUntil(
-                                          MaterialPageRoute(
-                                            builder: (context) => const CreatorDashboardScreen(),
-                                          ),
-                                          (route) => false,
-                                        );
-                                      }
-                                    } else {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(result.message),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  }
-                                }
-                              } else {
-                                // Use Web3Service for non-web platforms
-                                final web3 = Provider.of<Web3Service>(context, listen: false);
-                                final result = await web3.createAuction(
-                                  deviceId: deviceId,
-                                  startTime: _selectedStartTime,
-                                  duration: Duration(minutes: duration),
-                                  minimumBid: minBidEth,
-                                );
-                                
-                                _log('Non-web platform: Created auction via Web3Service');
-                                _log('Result success: ${result.success}');
-                                
-                                // Force refresh the auctions list to ensure the dashboard shows the new auction
-                                await web3.loadActiveAuctions(forceRefresh: true);
-                                
-                                // Log all auctions after refresh
-                                _log('All auctions after refresh:');
-                                web3.activeAuctions.forEach((key, value) {
-                                  _log('  Auction: $key, Owner: ${value['owner']}, isUserCreated: ${value['isUserCreated']}');
-                                });
-                                
-                                if (mounted) {
-                                  if (result.success) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Auction created successfully!'),
-                                        backgroundColor: Colors.green,
-                                      ),
-                                    );
-                                    
-                                    // Navigate directly to the dashboard after creating an auction
-                                    if (mounted) {
-                                      Navigator.of(context).pushAndRemoveUntil(
-                                        MaterialPageRoute(
-                                          builder: (context) => const CreatorDashboardScreen(),
-                                        ),
-                                        (route) => false,
-                                      );
-                                    }
-                                  } else {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(result.message),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
-                                  }
-                                }
-                              }
-                            } catch (e) {
-                              _log('ERROR during auction creation: $e');
-                              handleAuctionCreationError(e);
-                            }
-                          }
-                        } finally {
-                          if (mounted) {
-                            setState(() => _isLoading = false);
-                          }
-                        }
-                      }
-                    },
-              child: _isLoading
-                  ? const CircularProgressIndicator()
-                  : const Text('Create Auction'),
-            ),
-          ],
+              // Submit button
+              ElevatedButton(
+                onPressed: _isLoading ? null : _submitAuctionForm,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                child: _isLoading
+                    ? const CircularProgressIndicator()
+                    : const Text('Create Auction'),
+              ),
+            ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
   Widget _buildActiveAuctionsTab() {
-    final web3Service = context.watch<Web3Service>();
-
-    // If we should only show a specific device and have pre-filtered sessions
-    if (widget.showOnlySpecificDevice && widget.preFilteredSessions != null) {
-      _log('Showing only pre-filtered sessions for device: ${widget.deviceId}');
-
-      for (var entry in widget.preFilteredSessions!) {
-        _log('Pre-filtered session: ${entry.key}');
-      }
-
-      if (widget.preFilteredSessions!.isEmpty) {
-        return const Center(
-          child: Text('No auction sessions found for this device'),
-        );
-      }
-      
-      // Convert the MapEntry list to Auction objects
-      final List<Auction> auctionSessions = widget.preFilteredSessions!.map((entry) {
-        _log('Converting session: ${entry.key}');
-
-        // If it's already an Auction, use it directly
-        if (entry.value is Auction) {
-          _log('Entry is already an Auction object');
-          return entry.value as Auction;
-        }
-
-        // Otherwise, create an Auction from the Map
-        _log('Creating Auction from Map for device: ${entry.key}');
-
-        try {
-          final data = Map<String, dynamic>.from(entry.value);
-          data['deviceId'] = entry.key; // Ensure deviceId is set from the map entry key
-          return Auction.fromBlockchainData(data);
-        } catch (e) {
-          _log('Error converting session to Auction: $e');
-          return Auction(
-            deviceId: entry.key,
-            startTime: DateTime.now(),
-            endTime: DateTime.now().add(const Duration(hours: 1)),
-            owner: 'unknown',
-            minimumBid: 0.01,
-            isActive: true,
-            isFinalized: false,
-          );
-        }
-      }).toList();
-
-      _log('Converted ${auctionSessions.length} auction sessions');
-
-      // Check if we have any sessions
-      if (auctionSessions.isEmpty) {
-        return const Center(
-          child: Text('No auction sessions available'),
-        );
-      }
-
-      // Group the sessions by base device ID
-      final groupedSessions = _groupAuctionsByBaseDevice(auctionSessions);
-      _log('Grouped sessions by base device ID: ${groupedSessions.keys.join(', ')}');
-
-      // Try to find the exact device ID first
-      if (widget.deviceId != null && groupedSessions.containsKey(widget.deviceId)) {
-        _log('Found exact match for device ID: ${widget.deviceId}');
-        final slots = groupedSessions[widget.deviceId]!;
-
-        return SingleChildScrollView(
-          child: Column(
-            children: [
-              Text('Found ${slots.length} auction slots for device ${widget.deviceId}'),
-              _buildDeviceWithMultiSlotsCard(widget.deviceId!, slots, web3Service),
-            ],
-          ),
-        );
-      }
-
-      // Look for sessions that might start with the base device ID
-      final String? baseDeviceId = widget.deviceId?.split('-session-').first;
-      _log('Looking for base device ID: $baseDeviceId');
-
-      if (baseDeviceId != null) {
-        // Find any key that matches the base device ID pattern
-        final matchingKey = groupedSessions.keys.firstWhere(
-          (key) => key.startsWith(baseDeviceId) || key.contains(baseDeviceId),
-          orElse: () => '',
-        );
-
-        if (matchingKey.isNotEmpty) {
-          _log('Found matching key for base device ID: $matchingKey');
-          final slots = groupedSessions[matchingKey]!;
-
-          return SingleChildScrollView(
-            child: Column(
-              children: [
-                Text('Found ${slots.length} auction slots for device $matchingKey'),
-                _buildDeviceWithMultiSlotsCard(matchingKey, slots, web3Service),
-              ],
-            ),
-          );
-        }
-      }
-
-      // If we have any auctions at all, just show the first group
-      if (groupedSessions.isNotEmpty) {
-        _log('No exact match found, showing first group of sessions');
-        final firstDeviceId = groupedSessions.keys.first;
-        final slots = groupedSessions[firstDeviceId]!;
-
-        return SingleChildScrollView(
-          child: Column(
-            children: [
-              Text('Showing ${slots.length} auction slots for device $firstDeviceId'),
-              _buildDeviceWithMultiSlotsCard(firstDeviceId, slots, web3Service),
-            ],
-          ),
-        );
-      }
-
-      // Fallback if no sessions are found
-      return Center(
-        child: Text('No sessions found for device: ${widget.deviceId}'),
-      );
-    }
-    
-    // In web mode, use the MockAuctionProvider if available
-    if (kIsWeb) {
-      final mockAuctionProvider = context.watch<MockAuctionProvider?>();
-      if (mockAuctionProvider != null) {
-        _log('Using MockAuctionProvider for web');
-        final mockAuctions = mockAuctionProvider.auctions;
-        _log('Found ${mockAuctions.length} mock auctions');
-
-        if (mockAuctions.isEmpty) {
+    return FutureBuilder<List<Auction>>(
+      future: _fetchAuctions(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
-            child: Text('No active auctions available'),
+            child: CircularProgressIndicator(),
           );
         }
 
-        // Group auctions by their base device ID
-        final groupedAuctions = _groupAuctionsByBaseDevice(mockAuctions);
-        _log('Grouped ${groupedAuctions.length} device auctions from ${mockAuctions.length} auctions');
+        if (snapshot.hasError) {
+          return Center(
+            child: Text('Error: ${snapshot.error}'),
+          );
+        }
 
-        return _buildGroupedAuctionsList(groupedAuctions, web3Service);
-      }
-    }
+        // Check if we have data
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(
+            child: Text('No active auctions found'),
+          );
+        }
 
-    return RefreshIndicator(
-      onRefresh: _refreshData,
-      child: Column(
-        children: [
-          // Pending transactions section
-          if (_pendingTransactions.isNotEmpty)
-            Card(
-              margin: const EdgeInsets.all(16),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.pending_actions, color: Colors.orange),
-                        SizedBox(width: 8),
-                        Text(
-                          'Pending Transactions',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    if (_pendingTransactions.isEmpty)
-                      const Text('No pending transactions')
-                    else
-                      ExpansionTile(
-                        title: Text('${_pendingTransactions.length} transactions in progress'),
-                        children: [
-                          ListView(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 8.0),
-                                child: Text(
-                                  'These transactions are being processed on the blockchain and may take a few minutes to complete.',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontStyle: FontStyle.italic,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              ..._pendingTransactions.map((tx) {
-                                // Convert the map to a format TransactionStatusWidget can use
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 8.0),
-                                  child: Card(
-                                    elevation: 1,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8.0),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text('Transaction ID: ${tx['id']}'),
-                                          Text('Status: ${tx['status']}'),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
-                            ],
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          
-          // Auctions list
-          Expanded(
-            child: FutureBuilder<List<Auction>>(
-              future: _fetchAuctions(web3Service),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(),
-                  );
-                } else if (snapshot.hasError) {
-                  return Center(
-                    child: Text('Error: ${snapshot.error}'),
-                  );
-                } else {
-                  if (snapshot.connectionState == ConnectionState.done) {
-                    // Process auction entries to handle both Map and Auction objects
-                    final auctionList = _processAuctionEntries(web3Service.activeAuctions);
-
-                    // Group auctions by base device ID
-                    final groupedAuctions = _groupAuctionsByBaseDevice(auctionList);
-
-                    if (groupedAuctions.isEmpty) {
-                      return const Center(
-                        child: Text('No active auctions found'),
-                      );
-                    }
-
-                    return ListView.builder(
-                      controller: _auctionsScrollController,
-                      itemCount: groupedAuctions.length,
-                      itemBuilder: (context, index) {
-                        final deviceId = groupedAuctions.keys.elementAt(index);
-                        final slots = groupedAuctions[deviceId]!;
-
-                        // Sort slots by start time
-                        slots.sort((a, b) => a.startTime.compareTo(b.startTime));
-
-                        // Highlight the card if it matches the deviceId parameter
-                        final isHighlighted = widget.deviceId != null && deviceId == widget.deviceId;
-
-                        // Apply highlighting if needed
-                        if (isHighlighted) {
-                          return Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.blue, width: 2),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            margin: const EdgeInsets.all(8),
-                            child: _buildDeviceWithMultiSlotsCard(deviceId, slots, web3Service),
-                          );
-                        }
-
-                        return _buildDeviceWithMultiSlotsCard(deviceId, slots, web3Service);
-                      },
-                    );
-                  }
-                  return const Center(child: Text('No data available'));
-                }
-              },
-            ),
-          ),
-        ],
-      ),
+        // Build the list of auctions using the fetched data
+        return _buildAuctionsList(snapshot.data!);
+      },
     );
   }
 
-  Future<List<Auction>> _fetchAuctions(Web3Service web3Service) async {
-    // Set auctions in state
-    _auctions = _processAuctionEntries(web3Service.activeAuctions);
-    return _auctions;
+  /// Helper method to build the list of auctions
+  Widget _buildAuctionsList(List<Auction> auctions) {
+    if (auctions.isEmpty) {
+      return const Center(
+        child: Text('No active auctions found'),
+      );
+    }
+
+    // Group auctions by base device ID
+    final groupedAuctions = _groupAuctionsByBaseDevice(auctions);
+
+    // Build a list of cards for each group
+    return ListView.builder(
+      controller: _scrollController,
+      itemCount: groupedAuctions.length,
+      itemBuilder: (context, index) {
+        final deviceId = groupedAuctions.keys.elementAt(index);
+        final deviceAuctions = groupedAuctions[deviceId]!;
+
+        return _buildDeviceAuctionCard(deviceId, deviceAuctions);
+      },
+    );
   }
 
-  /// Process and display auction entries, handling both auction objects and maps
-  List<Auction> _processAuctionEntries(Map<String, dynamic> auctions) {
-    final List<Auction> result = [];
+  /// Process auction entries from various data sources
+  List<Auction> _processAuctionEntries(List<dynamic> entries) {
+    _log('Processing ${entries.length} auction entries');
+    List<Auction> result = [];
 
-    for (final entry in auctions.entries) {
-      if (entry.value is Auction) {
-        // If it's already an Auction object, add it directly
-        result.add(entry.value as Auction);
-        // Important: return here to prevent reaching the conversion code below
-        continue;
-      }
-
-      // Handle Map representation
-      if (entry.value is Map<String, dynamic>) {
-        try {
-          final auctionData = entry.value as Map<String, dynamic>;
-          final auction = Auction.fromBlockchainData(auctionData);
+    for (final dynamic auctionData in entries) {
+      try {
+        if (auctionData is Auction) {
+          final Auction auction = auctionData; // Explicit cast
+          _log('Adding direct Auction object: ${auction.deviceId}');
           result.add(auction);
-        } catch (e) {
-          _log('Failed to convert auction data to Auction object: $e');
+          continue; // Skip the rest of this iteration
         }
+
+        _log('Processing non-Auction data of type: ${auctionData.runtimeType}');
+
+        // Must be a Map then
+        final Map<String, dynamic> auctionMap = auctionData is Map
+            ? Map<String, dynamic>.from(auctionData as Map)
+            : <String, dynamic>{};
+
+        if (auctionMap.isEmpty) {
+          _log('Empty map data, skipping');
+          continue;
+        }
+
+        _log('Map keys: ${auctionMap.keys.join(', ')}');
+
+        // Extract required fields with additional error handling
+        try {
+          final deviceId = auctionMap['deviceId'] ?? 'unknown-device';
+          final owner = auctionMap['owner'] ?? 'unknown';
+          final startTimeStr = auctionMap['startTime'];
+          final endTimeStr = auctionMap['endTime'];
+
+          // Support both naming conventions (with and without 'minimum' prefix)
+          final minimumBidStr = auctionMap['minimumBid'] ?? auctionMap['minBid'];
+          final highestBidStr = auctionMap['highestBid'];
+          final highestBidder = auctionMap['highestBidder'] ?? '';
+
+          // Support both naming conventions (with and without 'is' prefix)
+          final isActive = auctionMap['isActive'] ?? auctionMap['active'] ?? true;
+          final isFinalized = auctionMap['isFinalized'] ?? auctionMap['finalized'] ?? false;
+          final isUserCreated = auctionMap['isUserCreated'] ?? false;
+
+          // Parse timestamps and bids
+          DateTime startTime = DateTime.now();
+          DateTime endTime = DateTime.now().add(const Duration(hours: 1));
+
+          // Parse timestamps
+          if (startTimeStr != null) {
+            if (startTimeStr is String) {
+              startTime = DateTime.tryParse(startTimeStr) ?? startTime;
+            } else if (startTimeStr is DateTime) {
+              startTime = startTimeStr;
+            }
+          }
+
+          if (endTimeStr != null) {
+            if (endTimeStr is String) {
+              endTime = DateTime.tryParse(endTimeStr) ?? endTime;
+            } else if (endTimeStr is DateTime) {
+              endTime = endTimeStr;
+            } else if (endTimeStr is BigInt) {
+              // Handle BigInt timestamp (seconds since epoch)
+              endTime = DateTime.fromMillisecondsSinceEpoch(endTimeStr.toInt() * 1000);
+            }
+          }
+
+          // Parse bids
+          double minimumBid = 0.0;
+          double highestBid = 0.0;
+
+          try {
+            minimumBid = minimumBidStr != null
+                ? (minimumBidStr is num
+                    ? minimumBidStr.toDouble()
+                    : double.tryParse(minimumBidStr.toString()) ?? 0.0)
+                : 0.0;
+
+            highestBid = highestBidStr != null
+                ? (highestBidStr is num
+                    ? highestBidStr.toDouble()
+                    : double.tryParse(highestBidStr.toString()) ?? 0.0)
+                : 0.0;
+          } catch (e) {
+            _log('Error parsing bids: $e');
+          }
+
+          // Create the auction object
+          final auction = Auction(
+            deviceId: deviceId,
+            owner: owner,
+            startTime: startTime,
+            endTime: endTime,
+            minimumBid: minimumBid,
+            highestBid: highestBid,
+            highestBidder: highestBidder,
+            isActive: isActive,
+            isFinalized: isFinalized,
+            isUserCreated: isUserCreated,
+          );
+
+          _log('Created auction: ${auction.deviceId} (${auction.startTime} - ${auction.endTime})');
+          result.add(auction);
+        } catch (e, stack) {
+          _log('Error processing auction map: $e\n$stack');
+        }
+      } catch (e, stack) {
+        _log('Error processing auction entry: $e\n$stack');
       }
     }
 
+    _log('Completed processing: returning ${result.length} auctions');
     return result;
+  }
+
+  /// Fetch auctions from Web3Service
+  Future<List<Auction>> _fetchAuctions() async {
+    _log('Fetching auctions from Web3Service');
+    try {
+      final web3Service = Provider.of<Web3Service>(context, listen: false);
+
+      // First, check if we're running in web mode and use MockAuctionProvider if available
+      if (kIsWeb) {
+        try {
+          final mockProvider = Provider.of<MockAuctionProvider>(context, listen: false);
+          _log('Using MockAuctionProvider for web platform, found ${mockProvider.auctions.length} auctions');
+
+          // Check if mockProvider has auctions, if not, try to force refresh from Web3Service
+          if (mockProvider.auctions.isEmpty) {
+            _log('MockAuctionProvider has no auctions, forcing refresh from Web3Service');
+            // Force Web3Service to refresh its auctions
+            await web3Service.refreshAuctions();
+
+            // Wait a moment for state to update
+            await Future.delayed(const Duration(milliseconds: 100));
+
+            // Try mockProvider again
+            if (mockProvider.auctions.isNotEmpty) {
+              _log('MockAuctionProvider now has ${mockProvider.auctions.length} auctions after refresh');
+              return mockProvider.auctions;
+            }
+          } else {
+            return mockProvider.auctions;
+          }
+        } catch (e) {
+          _log('MockAuctionProvider not available: $e');
+          // Continue with Web3Service if MockAuctionProvider is not available
+        }
+      }
+
+      // Force refresh to get the latest data
+      _log('Refreshing auctions from Web3Service');
+      await web3Service.refreshAuctions();
+
+      _log('Web3Service has ${web3Service.activeAuctions.length} active auctions');
+      _log('Auction keys: ${web3Service.activeAuctions.keys.join(', ')}');
+
+      // Process auction entries
+      final auctions = web3Service.activeAuctions;
+
+      // Convert the Map to a List for processing
+      final List<dynamic> auctionsList = [];
+
+      // Using a for loop instead of forEach for better control flow
+      for (final entry in auctions.entries) {
+        final key = entry.key;
+        final value = entry.value;
+
+        _log('Processing auction for key: $key, value type: ${value.runtimeType}');
+
+        if (value is Auction) {
+          _log('Direct Auction object found for: $key');
+          auctionsList.add(value);
+          continue; // Skip to next iteration to avoid type errors
+        } else {
+          // Handle map data (both Map<String, dynamic> and other Map types)
+          try {
+            // Create a copy of the map to avoid modifying the original
+            final mapCopy = Map<String, dynamic>.from(value as Map);
+
+            // Ensure deviceId is set
+            if (!mapCopy.containsKey('deviceId')) {
+              mapCopy['deviceId'] = key;
+            }
+
+            _log('Map data found for: ${mapCopy['deviceId']}');
+            auctionsList.add(mapCopy);
+          } catch (e) {
+            _log('Error processing map data: $e');
+          }
+        }
+      }
+
+      // Process and return the auction entries
+      final result = _processAuctionEntries(auctionsList);
+      _log('Processed ${result.length} auctions from Web3Service');
+      _log('Auction IDs from _fetchAuctions: ${result.map((a) => a.deviceId).join(', ')}');
+      return result;
+    } catch (e, stack) {
+      _log('Error fetching auctions: $e\n$stack');
+      return [];
+    }
   }
 
   /// Group auctions by their base device ID
   Map<String, List<Auction>> _groupAuctionsByBaseDevice(List<Auction> auctions) {
+    _log('Grouping ${auctions.length} auctions by base device ID');
+
     final Map<String, List<Auction>> result = {};
 
     for (final auction in auctions) {
-      // Extract the base device ID
-      String baseDeviceId = auction.deviceId;
+      final deviceId = _extractBaseDeviceId(auction.deviceId);
+      _log('Grouping auction ${auction.deviceId} -> base: $deviceId');
 
-      // Check for both formats: deviceId-session-X and deviceId::timestamp
-      if (baseDeviceId.contains('-session-')) {
-        baseDeviceId = baseDeviceId.split('-session-').first;
-      } else if (baseDeviceId.contains('::')) {
-        baseDeviceId = baseDeviceId.split('::').first;
-      }
-
-      _log('Grouping auction: ${auction.deviceId} with base ID: $baseDeviceId');
-
-      // Add to group
-      if (!result.containsKey(baseDeviceId)) {
-        result[baseDeviceId] = [];
-      }
-
-      result[baseDeviceId]!.add(auction);
+      result.putIfAbsent(deviceId, () => []);
+      result[deviceId]!.add(auction);
     }
 
     // Sort each group by start time
@@ -1176,17 +665,36 @@ class _AuctionScreenState extends State<AuctionScreen> {
     return result;
   }
 
+  /// Extract the base device ID from a session-specific device ID
+  String _extractBaseDeviceId(String deviceId) {
+    _log('Extracting base device ID from: $deviceId');
+
+    // Check for various formats: deviceId-session-X, deviceId::timestamp, etc.
+    if (deviceId.contains('-session-')) {
+      final baseId = deviceId.split('-session-').first;
+      _log('  Extracted base ID (session format): $baseId');
+      return baseId;
+    } else if (deviceId.contains('::')) {
+      final baseId = deviceId.split('::').first;
+      _log('  Extracted base ID (timestamp format): $baseId');
+      return baseId;
+    }
+
+    // For user-created auctions or other formats, return as is
+    _log('  No special format detected, using as is: $deviceId');
+    return deviceId;
+  }
+
   /// Build a card for displaying a device with multiple auction slots
-  Widget _buildDeviceWithMultiSlotsCard(String deviceId, List<Auction> slots, Web3Service web3Service) {
+  Widget _buildDeviceAuctionCard(String deviceId, List<Auction> slots) {
+    final web3Service = Provider.of<Web3Service>(context, listen: false);
+
     // Sort slots by start time
     slots.sort((a, b) => a.startTime.compareTo(b.startTime));
 
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+      elevation: 4,
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -1379,47 +887,504 @@ class _AuctionScreenState extends State<AuctionScreen> {
     );
   }
 
-  /// Build a ListView of grouped auction slots
-  Widget _buildGroupedAuctionsList(Map<String, List<Auction>> groupedAuctions, Web3Service web3Service) {
-    // Sort groups so they appear in a consistent order
-    final sortedKeys = groupedAuctions.keys.toList()..sort();
+  /// Method to refresh auction data
+  Future<void> _refreshData({bool forceRefresh = false}) async {
+    if (_isRefreshing) return;
 
-    return ListView.builder(
-      controller: _auctionsScrollController,
-      itemCount: sortedKeys.length,
-      itemBuilder: (context, index) {
-        final deviceId = sortedKeys[index];
-        final slots = groupedAuctions[deviceId]!;
+    setState(() {
+      _isRefreshing = true;
+      _isLoading = true;
+    });
 
-        // Sort slots by start time
-        slots.sort((a, b) => a.startTime.compareTo(b.startTime));
+    try {
+      // Get the web3 service
+      final web3Service = Provider.of<Web3Service>(context, listen: false);
 
-        return _buildDeviceWithMultiSlotsCard(deviceId, slots, web3Service);
-      },
+      // Force a refresh of auctions
+      if (forceRefresh) {
+        _log('Forcing refresh of auctions');
+        await web3Service.loadActiveAuctions(forceRefresh: true);
+      }
+
+      // Fetch the latest auctions
+      final auctions = await _fetchAuctions();
+
+      if (mounted) {
+        setState(() {
+          _auctions = auctions;
+          _isRefreshing = false;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      _log('Error refreshing data: $e');
+
+      if (mounted) {
+        setState(() {
+          _isRefreshing = false;
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  /// Log a message with the AuctionScreen prefix
+  void _log(String message) {
+    if (kDebugMode) {
+      print('AuctionScreen: $message');
+      developer.log(message, name: 'AuctionScreen');
+    }
+  }
+
+  /// Format an Ethereum address for display
+  String _formatAddress(String address) {
+    if (address.isEmpty) {
+      return 'N/A';
+    }
+    if (address.length < 10) {
+      return address;
+    }
+    return '${address.substring(0, 6)}...${address.substring(address.length - 4)}';
+  }
+
+  /// Format a DateTime for display
+  String _formatDateTime(DateTime dateTime) {
+    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} '
+        '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// Format a value to ETH, handling both BigInt (wei) and double (already in ETH) values
+  String _formatEther(dynamic value) {
+    if (value is BigInt) {
+      // Convert from wei to ETH
+      final ethValue = value.toDouble() / 1e18;
+      return ethValue.toStringAsFixed(4);
+    } else if (value is double) {
+      // Already in ETH
+      return value.toStringAsFixed(4);
+    } else if (value is num) {
+      // Other numeric type
+      return (value.toDouble()).toStringAsFixed(4);
+    } else {
+      // Unknown type
+      return '0.0000';
+    }
+  }
+
+  void handleAuctionCreationError(dynamic e) {
+    _log('Error creating auction: $e');
+
+    String errorMessage = 'Failed to create auction: $e';
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(errorMessage),
+        backgroundColor: Colors.red,
+      ),
     );
   }
 
-  /// Method to refresh auction data
-  Future<void> _refreshData() async {
-    final web3Service = Provider.of<Web3Service>(context, listen: false);
-    
-    _showLoadingIndicator('Refreshing auctions...');
-    _errorMessage = null;
-    
+  /// Submit the auction creation form
+  Future<void> _submitAuctionForm() async {
+    // Get theme and scaffold messenger for snackbars
+    final theme = Theme.of(context);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    // Get required form data
+    final deviceId = _deviceIdController.text.trim();
+
+    setState(() {
+      _isLoading = true;
+    });
+
     try {
-      await web3Service.loadActiveAuctions(forceRefresh: true);
-      
-      // If a specific deviceId is provided, scroll to it after refreshing
-      if (widget.deviceId != null) {
-        _scrollToHighlightedAuction();
+      // Get services
+      final web3Service = context.read<Web3Service>();
+
+      // Validate inputs
+      if (deviceId.isEmpty) {
+        throw Exception('Device ID is required');
       }
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to refresh auctions: ${e.toString()}';
+
+      if (_minimumBidController.text.isEmpty) {
+        throw Exception('Minimum bid is required');
+      }
+
+      // Parse values
+      final double minimumBid = double.parse(_minimumBidController.text);
+
+      // Calculate number of slots based on duration (5 minutes per slot)
+      final int numSlots = _selectedSlotDuration ~/ 5;
+
+      // Calculate start time (1 minute from now)
+      final now = DateTime.now();
+      final DateTime startTime = now.add(const Duration(minutes: 1));
+
+      _log('Creating auction with device: $deviceId, min bid: $minimumBid, duration: $_selectedSlotDuration minutes, slots: $numSlots');
+
+      // Create auction
+      final result = await web3Service.createAuction(
+        deviceId: deviceId,
+        startTime: startTime,
+        duration: _selectedSlotDuration, // Pass duration in minutes
+        minimumBid: minimumBid,
+        isUserCreated: true, // Mark as user-created for UI filtering
+      );
+
+      _log('Auction creation result: ${result.success}');
+      _log('Result message: ${result.message}');
+      _log('Result data: ${result.data}');
+
+      // Reset form
+      _deviceIdController.clear();
+      _minimumBidController.clear();
+
+      // Force a complete refresh of the active auctions
+      _log('Before loadActiveAuctions - active auctions count: ${web3Service.activeAuctions.length}');
+      _log('Active auction keys: ${web3Service.activeAuctions.keys.join(', ')}');
+
+      await web3Service.loadActiveAuctions(forceRefresh: true);
+
+      _log('After loadActiveAuctions - active auctions count: ${web3Service.activeAuctions.length}');
+      _log('Active auction keys: ${web3Service.activeAuctions.keys.join(', ')}');
+
+      // Convert activeAuctions map to a list for processing
+      final List<dynamic> auctionsList = [];
+      web3Service.activeAuctions.forEach((key, value) {
+        _log('Processing auction with key: $key, type: ${value.runtimeType}');
+        if (value is Auction) {
+          auctionsList.add(value);
+          _log('Added as Auction object');
+        } else {
+          final mapCopy = Map<String, dynamic>.from(value);
+          if (!mapCopy.containsKey('deviceId')) {
+            mapCopy['deviceId'] = key;
+          }
+          auctionsList.add(mapCopy);
+          _log('Added as Map, keys: ${mapCopy.keys.join(', ')}');
+        }
       });
-      _log('Error refreshing auctions: ${e.toString()}');
+
+      // Process auctions explicitly to ensure all are included
+      _auctions = _processAuctionEntries(auctionsList);
+      _log('Processed ${_auctions.length} auctions after creation');
+      _log('Auction IDs in _auctions: ${_auctions.map((a) => a.deviceId).join(', ')}');
+
+      // If the newly created auction is not in the list, add it manually
+      if (!_auctions.any((a) => a.deviceId == deviceId)) {
+        _log('Newly created auction not found in _auctions list, adding manually');
+        _auctions.add(Auction(
+          deviceId: deviceId,
+          owner: Provider.of<Web3Service>(context, listen: false).currentAddress ?? '0xMockOwnerAddress',
+          startTime: startTime,
+          endTime: startTime.add(Duration(minutes: _selectedSlotDuration)),
+          minimumBid: minimumBid,
+          highestBid: 0.0,
+          highestBidder: '0x0000000000000000000000000000000000000000',
+          isActive: true,
+          isFinalized: false,
+          isUserCreated: true,
+        ));
+        _log('After manual addition, auction count: ${_auctions.length}');
+      }
+
+      // Switch to the active auctions tab and mark loading as complete
+      setState(() {
+        _isLoading = false;
+        _tabController.index = 1; // Switch to active auctions tab
+        _log('Set state: isLoading=$_isLoading, tabIndex=${_tabController.index}');
+      });
+
+      // Show success message
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Auction created successfully!'),
+          backgroundColor: theme.colorScheme.primary,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+
+      // Highlight the newly created auction for visual feedback
+      _highlightNewlyCreatedAuction(deviceId);
+
+      // Force another refresh after a short delay to ensure UI is updated
+      Future.delayed(const Duration(seconds: 1), () {
+        if (mounted) {
+          _log('Starting delayed refresh...');
+          _refreshData();
+        }
+      });
+    } catch (e) {
+      String errorMessage = 'Failed to create auction: $e';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage),
+          backgroundColor: Colors.red,
+        ),
+      );
     } finally {
-      _hideLoadingIndicator();
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Highlight newly created auction in the list (visual feedback)
+  void _highlightNewlyCreatedAuction(String deviceId) {
+    _log('Highlighting newly created auction: $deviceId');
+
+    // Find the auction in the list
+    final index = _auctions.indexWhere((a) => a.deviceId == deviceId);
+
+    if (index >= 0) {
+      _log('Found auction at index $index');
+
+      // Scroll to the auction
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          // Calculate the position of the widget
+          final itemHeight = 150.0; // Approximate height of each item
+          final offset = index * itemHeight;
+
+          _scrollController.animateTo(
+            offset,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeInOut,
+          );
+        }
+      });
+
+      // Flash animation can be implemented here if needed
+    } else {
+      _log('Auction not found in list');
+    }
+  }
+
+  /// Method to check if we're in mock mode and create mock auctions if needed
+  void _checkAndCreateMockAuctions() {
+    // Use Future.microtask to avoid calling setState during build
+    Future.microtask(() async {
+      final web3Service = context.read<Web3Service>();
+
+      _log('Checking for mock mode: ${web3Service.isMockMode}');
+      if (web3Service.isMockMode) {
+        _log('Mock mode detected, ensuring mock auctions exist');
+
+        // Check if MockAuctionProvider is available
+        try {
+          final mockProvider = Provider.of<MockAuctionProvider>(context, listen: false);
+          _log('MockAuctionProvider found, it has ${mockProvider.auctions.length} auctions');
+        } catch (e) {
+          _log('MockAuctionProvider not available: $e');
+        }
+
+        // Get current auctions
+        final result = await web3Service.getActiveAuctions();
+        _log('Active auctions result: success=${result.success}, count=${result.data?.length ?? 0}');
+
+        if (!result.success || (result.data?.isEmpty ?? true)) {
+          _log('No active auctions found in mock mode, forcing mock auctions creation');
+          await web3Service.forceEnableMockMode();
+
+          // Try creating a mock auction explicitly
+          final auctionResult = await web3Service.createMockAuction();
+          _log('Mock auction creation result: ${auctionResult.success}');
+
+          // Refresh the UI
+          if (mounted) {
+            _log('Refreshing UI after creating mock auctions');
+            _refreshData();
+          }
+        } else {
+          _log('Mock auctions already exist: ${result.data?.length ?? 0}');
+          if (result.data != null) {
+            for (var i = 0; i < result.data!.length; i++) {
+              _log('Auction $i: ${result.data![i]}');
+            }
+          }
+        }
+      }
+    });
+  }
+
+  /// Method to handle bidding on an auction
+  void _bidOnAuction(Auction auction) {
+    _showBidDialog(
+      context,
+      auction,
+      Provider.of<Web3Service>(context, listen: false),
+      _refreshData,
+    );
+  }
+
+  /// Method to handle finalizing an auction slot
+  void _finalizeAuctionSlot(String auctionId) {
+    final web3Service = Provider.of<Web3Service>(context, listen: false);
+    _finalizeAuction(web3Service, auctionId);
+  }
+
+  /// Show dialog for placing a bid
+  Future<void> _showBidDialog(
+    BuildContext context,
+    Auction auction,
+    Web3Service web3,
+    VoidCallback refreshData,
+  ) async {
+    final highestBid = auction.highestBid;
+    final minRequired = highestBid > 0
+        ? highestBid + 0.000000000000000001 // Minimum increment of 1 wei
+        : auction.minimumBid;
+
+    // Convert wei to ETH for display
+    final minRequiredEth = minRequired;
+
+    double amount = minRequiredEth;
+
+    final controller = TextEditingController(text: minRequiredEth.toString());
+
+    // Show the bid dialog
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Place a Bid'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Minimum bid: $minRequiredEth ETH'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'Bid Amount (ETH)',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (value) {
+                try {
+                  amount = double.parse(value);
+                } catch (e) {
+                  // Invalid input, keep the last valid amount
+                }
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(amount),
+            child: const Text('Place Bid'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null) return; // User cancelled
+
+    // Place the bid using the Web3Service
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Create the transaction
+      final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
+
+      await metaTxProvider.executeFunction(
+        targetContract: web3.getContractAddress(),
+        functionSignature: 'placeBid(string,uint256)',
+        functionParams: [auction.deviceId, (result * 1e18).toInt()],
+        description: 'Bid $result ETH on auction ${auction.deviceId}',
+      );
+
+      // Show a subtle confirmation that the bid was submitted
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Bid submitted!'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: Colors.white,
+            onPressed: () {
+              // Maybe open a transaction details page
+            },
+          ),
+        ),
+      );
+
+      // Refresh auctions after a short delay to allow transaction to process
+      Future.delayed(const Duration(seconds: 2), refreshData);
+    } catch (e) {
+      String errorMessage = 'Failed to place bid: ${e.toString()}';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Finalize an auction (called when auction ends)
+  Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Create the transaction
+      final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
+
+      await metaTxProvider.executeFunction(
+        targetContract: web3.getContractAddress(),
+        functionSignature: 'finalizeAuction(string)',
+        functionParams: [deviceId],
+        description: 'Finalize auction for device $deviceId',
+      );
+
+      // Show a subtle confirmation
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Finalization submitted!'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: Colors.white,
+            onPressed: () {
+              // Maybe open a transaction details page
+            },
+          ),
+        ),
+      );
+
+      // Refresh auctions after a delay
+      Future.delayed(const Duration(seconds: 2), _refreshData);
+    } catch (e) {
+      String errorMessage = 'Failed to finalize auction: ${e.toString()}';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
@@ -1553,15 +1518,11 @@ class _AuctionScreenState extends State<AuctionScreen> {
                 onPressed: () async {
                   Navigator.pop(context);
                   await web3Service.forceEnableMockMode();
+
+                  // Refresh the UI
                   if (mounted) {
-                    ScaffoldMessenger.of(currentContext).showSnackBar(
-                      const SnackBar(
-                        content: Text('Forced mock mode with auctions'),
-                        backgroundColor: Colors.orange,
-                      ),
-                    );
+                    _refreshData();
                   }
-                  _refreshData();
                 },
                 child: const Text(
                   'Force Mock Mode with Auctions',
@@ -1593,309 +1554,5 @@ class _AuctionScreenState extends State<AuctionScreen> {
         );
       }
     }
-  }
-
-  /// Log a message with the AuctionScreen prefix
-  void _log(String message) {
-    developer.log('AuctionScreen: $message');
-  }
-
-  /// Format an Ethereum address for display
-  String _formatAddress(String address) {
-    if (address.isEmpty) {
-      return 'N/A';
-    }
-    if (address.length < 10) {
-      return address;
-    }
-    return '${address.substring(0, 6)}...${address.substring(address.length - 4)}';
-  }
-
-  /// Format a DateTime for display
-  String _formatDateTime(DateTime dateTime) {
-    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} '
-        '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
-  }
-
-  /// Format a value to ETH, handling both BigInt (wei) and double (already in ETH) values
-  String _formatEther(dynamic value) {
-    if (value is BigInt) {
-      // Convert from wei to ETH
-      final ethValue = value.toDouble() / 1e18;
-      return ethValue.toStringAsFixed(4);
-    } else if (value is double) {
-      // Already in ETH
-      return value.toStringAsFixed(4);
-    } else if (value is num) {
-      // Other numeric type
-      return (value.toDouble()).toStringAsFixed(4);
-    } else {
-      // Unknown type
-      return '0.0000';
-    }
-  }
-
-  void handleAuctionCreationError(dynamic e) {
-    setState(() {
-      _isLoading = false;
-      String errorMsg = e.toString();
-      if (errorMsg.startsWith('Exception: ')) {
-        errorMsg = errorMsg.substring('Exception: '.length);
-      }
-      if (errorMsg.contains('insufficient funds')) {
-        errorMsg = 'Insufficient funds in your wallet to create this auction';
-      } else if (errorMsg.contains('user rejected')) {
-        errorMsg = 'Transaction was rejected in your wallet';
-      } else if (errorMsg.contains('Internal JSON-RPC error')) {
-        errorMsg = 'Blockchain connection error. Switched to mock mode.';
-      } else if (errorMsg.contains('execution reverted')) {
-        final revertMatch = RegExp(r'reverted: (.+?)(?:,|$)').firstMatch(errorMsg);
-        if (revertMatch != null) {
-          errorMsg = 'Smart contract error: ${revertMatch.group(1)}';
-        } else {
-          errorMsg = 'Smart contract rejected the transaction';
-        }
-      }
-      _errorMessage = errorMsg;
-    });
-
-    // Store context in a local variable to avoid using it across async gaps
-    final currentContext = context;
-    if (mounted) {
-      ScaffoldMessenger.of(currentContext).showSnackBar(
-        SnackBar(
-          content: Text('Error: $_errorMessage'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'Details',
-            onPressed: () {
-              // Use the stored context here
-              showDialog(
-                context: currentContext,
-                builder: (dialogContext) => AlertDialog(
-                  title: const Text('Error Details'),
-                  content: SingleChildScrollView(
-                    child: Text(e.toString()),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext),
-                      child: const Text('Close'),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-      );
-    }
-  }
-
-  void _bidOnAuction(Auction auction) {
-    _showBidDialog(
-      context,
-      auction,
-      Provider.of<Web3Service>(context, listen: false),
-      _refreshData,
-    );
-  }
-
-  void _finalizeAuctionSlot(String auctionId) {
-    final web3Service = Provider.of<Web3Service>(context, listen: false);
-    _finalizeAuction(web3Service, auctionId);
-  }
-
-  Future<void> _showBidDialog(
-    BuildContext context,
-    Auction auction,
-    Web3Service web3,
-    VoidCallback refreshData,
-  ) async {
-    final highestBid = auction.highestBid;
-    final minRequired = highestBid > 0
-        ? highestBid + 0.000000000000000001 // Minimum increment of 1 wei
-        : auction.minimumBid;
-
-    // Convert wei to ETH for display
-    final minRequiredEth = minRequired;
-
-    double amount = minRequiredEth;
-
-    final controller = TextEditingController(text: minRequiredEth.toString());
-
-    // Show the bid dialog
-    final result = await showDialog<double>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Place a Bid'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Minimum bid: $minRequiredEth ETH'),
-            const SizedBox(height: 16),
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: 'Bid Amount (ETH)',
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              onChanged: (value) {
-                try {
-                  amount = double.parse(value);
-                } catch (e) {
-                  // Invalid input, keep the last valid amount
-                }
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(amount),
-            child: const Text('Place Bid'),
-          ),
-        ],
-      ),
-    );
-
-    if (result == null) return; // User cancelled
-
-    // Place the bid using the Web3Service
-    setState(() {
-      _isLoading = true;
-      _loadingMessage = 'Placing bid...';
-    });
-
-    try {
-      final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
-
-      // Create the transaction
-      final txId = await metaTxProvider.executeFunction(
-        targetContract: web3.getContractAddress(),
-        functionSignature: 'placeBid(string,uint256)',
-        functionParams: [auction.deviceId, (result * 1e18).toInt()],
-        description: 'Bid $result ETH on auction ${auction.deviceId}',
-      );
-
-      // Show a subtle confirmation that the bid was submitted
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Bid submitted! Transaction ID: ${txId.substring(0, 10)}...'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'View',
-            textColor: Colors.white,
-            onPressed: () {
-              // Maybe open a transaction details page
-            },
-          ),
-        ),
-      );
-
-      _updatePendingTransactions();
-
-      // Refresh auctions after a short delay to allow transaction to process
-      Future.delayed(const Duration(seconds: 2), refreshData);
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to place bid: ${e.toString()}';
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to place bid: ${e.toString()}'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        ),
-      );
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
-    setState(() {
-      _isLoading = true;
-      _loadingMessage = 'Finalizing auction...';
-    });
-
-    try {
-      final metaTxProvider = Provider.of<MetaTransactionProvider>(context, listen: false);
-
-      // Create the transaction
-      final txId = await metaTxProvider.executeFunction(
-        targetContract: web3.getContractAddress(),
-        functionSignature: 'finalizeAuction(string)',
-        functionParams: [deviceId],
-        description: 'Finalize auction for device $deviceId',
-      );
-
-      // Show a subtle confirmation
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Finalization submitted! Transaction ID: ${txId.substring(0, 10)}...'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'View',
-            textColor: Colors.white,
-            onPressed: () {
-              // Maybe open a transaction details page
-            },
-          ),
-        ),
-      );
-
-      _updatePendingTransactions();
-
-      // Refresh auctions after a delay
-      Future.delayed(const Duration(seconds: 2), _refreshData);
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to finalize auction: ${e.toString()}';
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to finalize auction: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  void _showLoadingIndicator(String message) {
-    setState(() {
-      _isLoading = true;
-      _loadingMessage = message;
-    });
-  }
-
-  void _hideLoadingIndicator() {
-    setState(() {
-      _isLoading = false;
-    });
-  }
-
-  void _onSlotDurationSelected(int duration) {
-    setState(() {
-      _selectedSlotDuration = duration;
-      _durationController.text = duration.toString(); // Update the text controller for backward compatibility
-    });
   }
 }

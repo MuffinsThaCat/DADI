@@ -25,6 +25,7 @@ class MockWeb3Service extends Mock implements Web3Service {
           highestBidder: '',
           isActive: true,
           isFinalized: false,
+          isUserCreated: false,
         ),
       )),
     ) as Future<OperationResult<Auction>>;

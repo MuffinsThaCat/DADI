@@ -7,7 +7,7 @@ class SlotDurationSelector extends StatelessWidget {
   final int totalDurationMinutes;
 
   // Standard durations that will always be available
-  static const List<int> standardDurations = [15, 30, 45, 60, 90, 120, 240];
+  static const List<int> standardDurations = [15, 30, 45, 60, 90, 120, 180];
 
   const SlotDurationSelector({
     Key? key,

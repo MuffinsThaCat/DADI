@@ -13,57 +13,87 @@ class MultiSlotAuctionService {
   
   MultiSlotAuctionService(this._web3Service);
   
-  /// Create an auction with multiple time slots
-  Future<OperationResult<List<Auction>>> createMultiSlotAuction({
-    required String deviceId,
+  /// Create a multi-slot auction
+  Future<OperationResult> createMultiSlotAuction({
+    required String sessionName,
     required DateTime startTime,
     required int slotDurationMinutes,
-    required int numSlots, 
+    required int slotCount,
     required double minimumBid,
   }) async {
-    final List<Auction> createdAuctions = [];
-    final List<String> errors = [];
+    final sessionId = 'session-${DateTime.now().millisecondsSinceEpoch}';
     
-    _log('Creating multi-slot auction for device: $deviceId, slots: $numSlots, duration: $slotDurationMinutes minutes');
+    _log('Creating multi-slot auction:');
+    _log('  Session ID: $sessionId');
+    _log('  Session Name: $sessionName');
+    _log('  Start Time: $startTime');
+    _log('  Slot Duration: $slotDurationMinutes minutes');
+    _log('  Slot Count: $slotCount');
+    _log('  Minimum Bid: $minimumBid ETH');
     
-    for (int i = 0; i < numSlots; i++) {
-      final slotStartTime = startTime.add(Duration(minutes: i * slotDurationMinutes));
-      final slotEndTime = slotStartTime.add(Duration(minutes: slotDurationMinutes));
+    try {
+      // Calculate slot durations
+      final List<DateTime> slotStartTimes = [];
+      final int slotDurationHours = slotDurationMinutes ~/ 60;
+      final int slotDurationRemainingMinutes = slotDurationMinutes % 60;
       
-      // Generate a unique ID for this slot
-      final slotId = "$deviceId-slot-$i";
-      final compositeId = DeviceSlotIdentifier.generateSlotDeviceId(deviceId, slotStartTime);
+      // If we have remaining minutes, we need to round up to the nearest hour for compatibility
+      final int adjustedSlotDurationHours = slotDurationRemainingMinutes > 0 
+          ? slotDurationHours + 1 
+          : slotDurationHours;
       
-      _log('Creating slot $i: $slotId, composite ID: $compositeId, time: $slotStartTime - $slotEndTime');
+      _log('  Adjusted slot duration: $adjustedSlotDurationHours hours');
       
-      try {
+      // Create all the slots
+      for (int i = 0; i < slotCount; i++) {
+        final slotStartTime = startTime.add(Duration(minutes: i * slotDurationMinutes));
+        slotStartTimes.add(slotStartTime);
+        
+        // Create unique slot ID that includes the session ID
+        final slotId = '$sessionId-slot-$i';
+        
+        _log('Creating slot $i:');
+        _log('  Slot ID: $slotId');
+        _log('  Start Time: $slotStartTime');
+        _log('  Duration: $adjustedSlotDurationHours hours');
+        
         final result = await _web3Service.createAuction(
-          deviceId: compositeId,
+          deviceId: slotId,
           startTime: slotStartTime,
-          duration: Duration(minutes: slotDurationMinutes),
+          duration: adjustedSlotDurationHours,
           minimumBid: minimumBid,
+          isUserCreated: true,
         );
         
-        if (result.success && result.data != null) {
-          createdAuctions.add(result.data!);
-        } else {
-          errors.add('Failed to create slot $i: ${result.message}');
+        if (!result.success) {
+          _log('Failed to create slot: ${result.message}');
+          return OperationResult(
+            success: false,
+            message: 'Failed to create slot $i: ${result.message}',
+          );
         }
-      } catch (e) {
-        errors.add('Error creating slot $i: $e');
       }
-    }
-    
-    if (errors.isEmpty) {
-      return OperationResult.success(
-        data: createdAuctions,
-        message: 'Successfully created ${createdAuctions.length} auction slots',
-      );
-    } else {
+      
+      _log('✅ All $slotCount slots created successfully');
+      
+      // Debug: Get the IDs of all active auctions before refresh
+      _log('Active auctions before refresh: ${_web3Service.activeAuctions.keys.join(', ')}');
+      
+      // Force refresh auctions after creating all slots
+      await _web3Service.loadActiveAuctions(forceRefresh: true);
+
+      // Debug: Get the IDs of all active auctions after refresh
+      _log('Active auctions after refresh: ${_web3Service.activeAuctions.keys.join(', ')}');
+      
       return OperationResult(
-        success: createdAuctions.isNotEmpty,
-        data: createdAuctions,
-        message: 'Created ${createdAuctions.length} slots with ${errors.length} errors: ${errors.join(', ')}',
+        success: true,
+        message: 'Successfully created $slotCount auction slots',
+      );
+    } catch (e) {
+      _log('❌ Error creating multi-slot auction: $e');
+      return OperationResult(
+        success: false,
+        message: 'Error creating multi-slot auction: $e'
       );
     }
   }

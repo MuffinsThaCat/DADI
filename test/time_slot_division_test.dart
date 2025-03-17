@@ -25,6 +25,7 @@ void main() {
       highestBidder: '',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
   });
 
@@ -85,6 +86,7 @@ void main() {
       highestBidder: '',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
     
     // Build the auction detail screen

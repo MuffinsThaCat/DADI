@@ -5,9 +5,14 @@ import '../services/web3_service.dart';
 import 'auction_screen.dart';
 import '../widgets/wavy_background.dart';
 
-class AuctionListScreen extends StatelessWidget {
+class AuctionListScreen extends StatefulWidget {
   const AuctionListScreen({super.key});
 
+  @override
+  State<AuctionListScreen> createState() => _AuctionListScreenState();
+}
+
+class _AuctionListScreenState extends State<AuctionListScreen> {
   void _navigateToAuction(BuildContext context, String deviceId) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -17,10 +22,37 @@ class AuctionListScreen extends StatelessWidget {
   }
 
   @override
+  void initState() {
+    super.initState();
+    // Schedule a post-frame callback to fetch auctions
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final web3Service = Provider.of<Web3Service>(context, listen: false);
+      web3Service.getActiveAuctions();
+      developer.log('Fetching auctions in initState', name: 'AuctionList');
+    });
+  }
+
+  void _refreshAuctions() {
+    final web3Service = Provider.of<Web3Service>(context, listen: false);
+    web3Service.getActiveAuctions();
+    setState(() {
+      // Trigger rebuild
+    });
+    developer.log('Manual refresh completed', name: 'AuctionList');
+  }
+
+  @override
   Widget build(BuildContext context) {
     final web3Service = Provider.of<Web3Service>(context);
     final auctions = web3Service.activeAuctions;
     final theme = Theme.of(context);
+    
+    developer.log('AuctionListScreen build called, auction count: ${auctions.length}', name: 'AuctionList');
+    
+    // Log all available auctions for debugging
+    auctions.forEach((key, value) {
+      developer.log('Available auction: $key, isUserCreated: ${value['isUserCreated']}', name: 'AuctionList');
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -33,6 +65,13 @@ class AuctionListScreen extends StatelessWidget {
         ),
         centerTitle: true,
         elevation: 0,
+        actions: [
+          // Add refresh button
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshAuctions,
+          ),
+        ],
       ),
       body: WavyBackground(
         primaryColor: theme.colorScheme.primary,
@@ -46,8 +85,8 @@ class AuctionListScreen extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Text('No active auctions found'),
-                        const SizedBox(height: 16),
+                        Text('No active auctions found'),
+                        SizedBox(height: 16),
                       ],
                     ),
                   )
@@ -58,6 +97,12 @@ class AuctionListScreen extends StatelessWidget {
                       final deviceId = auctions.keys.elementAt(index);
                       final auction = auctions[deviceId]!;
                       
+                      // Debug logging to see auction structure
+                      developer.log('AUCTION LIST: Processing auction: $deviceId', name: 'AuctionList');
+                      developer.log('AUCTION LIST: Structure: ${auction.keys.toList().join(', ')}', name: 'AuctionList');
+                      developer.log('AUCTION LIST: Owner: ${auction['owner']}', name: 'AuctionList');
+                      developer.log('AUCTION LIST: Fields: ${auction.toString()}', name: 'AuctionList');
+                      
                       // Handle currentBid safely
                       BigInt currentBid;
                       try {
@@ -65,6 +110,9 @@ class AuctionListScreen extends StatelessWidget {
                           currentBid = auction['highestBid'] as BigInt;
                         } else if (auction['highestBid'] is int) {
                           currentBid = BigInt.from(auction['highestBid'] as int);
+                        } else if (auction['highestBid'] is double) {
+                          // Convert double to BigInt by treating it as wei
+                          currentBid = BigInt.from((auction['highestBid'] as double) * 1e18);
                         } else if (auction['highestBid'] is String) {
                           currentBid = BigInt.parse(auction['highestBid'] as String);
                         } else {
@@ -72,7 +120,7 @@ class AuctionListScreen extends StatelessWidget {
                         }
                       } catch (e) {
                         currentBid = BigInt.zero;
-                        developer.log('Error parsing highestBid: $e');
+                        developer.log('Error parsing highestBid: $e', name: 'AuctionList');
                       }
                       
                       // Convert to DateTime safely
@@ -90,6 +138,9 @@ class AuctionListScreen extends StatelessWidget {
                         endTime = DateTime.now().add(const Duration(hours: 1));
                       }
 
+                      // User-created flag
+                      final isUserCreated = auction['isUserCreated'] == true;
+
                       return Card(
                         child: ListTile(
                           title: Text('Device: $deviceId'),
@@ -98,6 +149,8 @@ class AuctionListScreen extends StatelessWidget {
                             children: [
                               Text('Current Bid: ${_formatEther(currentBid)} ETH'),
                               Text('Ends: ${_formatDateTime(endTime)}'),
+                              if (isUserCreated) 
+                                const Text('User Created', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
                             ],
                           ),
                           onTap: () => _navigateToAuction(context, deviceId),

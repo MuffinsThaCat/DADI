@@ -168,6 +168,7 @@ class Web3ServiceMobile extends Web3ServiceInterface {
         highestBidder: (result[0][5] as EthereumAddress).hex,
         isActive: result[0][6] as bool,
         isFinalized: result[0][7] as bool,
+        isUserCreated: false,
       );
       
       return OperationResult<Auction>(
@@ -289,6 +290,7 @@ class Web3ServiceMobile extends Web3ServiceInterface {
         highestBidder: _currentAddress?.hex ?? '0xMockBidder',
         isActive: auction.isActive,
         isFinalized: auction.isFinalized,
+        isUserCreated: auction.isUserCreated,
       );
       
       notifyListeners();
@@ -383,6 +385,7 @@ class Web3ServiceMobile extends Web3ServiceInterface {
         highestBidder: auction.highestBidder,
         isActive: false,
         isFinalized: true,
+        isUserCreated: auction.isUserCreated,
       );
       
       notifyListeners();
@@ -462,6 +465,7 @@ class Web3ServiceMobile extends Web3ServiceInterface {
       highestBidder: '0x0000000000000000000000000000000000000000',
       isActive: true,
       isFinalized: false,
+      isUserCreated: false,
     );
     
     _log('Mock mode forced enabled, active auctions: ${_auctions.length}');
