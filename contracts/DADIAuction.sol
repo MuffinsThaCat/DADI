@@ -19,6 +19,7 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
         address highestBidder;
         uint256 highestBid;
         bool active;
+        uint256 biddingEndTime; // When bidding actually ends (before slot starts)
         mapping(address => uint256) bids;
     }
 
@@ -36,7 +37,7 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
     mapping(bytes32 => TimeSlot) public activeControllers;
 
     // Events
-    event AuctionCreated(bytes32 indexed deviceId, address indexed owner, uint256 startTime, uint256 endTime, uint256 minBid);
+    event AuctionCreated(bytes32 indexed deviceId, address indexed owner, uint256 startTime, uint256 endTime, uint256 minBid, uint256 biddingEndTime);
     event BidPlaced(bytes32 indexed deviceId, address indexed bidder, uint256 amount);
     event AuctionEnded(bytes32 indexed deviceId, address indexed winner, uint256 amount);
     event ControlTransferred(bytes32 indexed deviceId, address indexed controller, uint256 startTime, uint256 endTime);
@@ -52,10 +53,9 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
         _;
     }
 
-    modifier validAuctionPeriod(bytes32 deviceId) {
+    modifier validBiddingPeriod(bytes32 deviceId) {
         Auction storage auction = auctions[deviceId];
-        require(block.timestamp >= auction.startTime, "Auction has not started");
-        require(block.timestamp <= auction.endTime, "Auction has ended");
+        require(block.timestamp < auction.biddingEndTime, "Bidding period has ended");
         _;
     }
 
@@ -65,37 +65,43 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
      * @param startTime When the control period starts
      * @param duration Duration of control in seconds
      * @param minBid Minimum bid amount in wei
+     * @param biddingEndBufferMinutes Buffer time (in minutes) before auction start when bidding ends (1-5 minutes)
      */
     function createAuction(
         bytes32 deviceId,
         uint256 startTime,
         uint256 duration,
-        uint256 minBid
+        uint256 minBid,
+        uint256 biddingEndBufferMinutes
     ) external whenNotPaused auctionNotExists(deviceId) {
         require(startTime > block.timestamp, "Start time must be in the future");
         require(duration > 0, "Duration must be positive");
         require(minBid > 0, "Minimum bid must be positive");
+        require(biddingEndBufferMinutes >= 1 && biddingEndBufferMinutes <= 5, "Bidding end buffer must be between 1-5 minutes");
+        
+        // Calculate end time and bidding end time
+        uint256 endTime = startTime + duration;
+        uint256 biddingEndTime = startTime - (biddingEndBufferMinutes * 1 minutes);
+        
+        require(biddingEndTime > block.timestamp, "Bidding end time must be in the future");
 
         Auction storage auction = auctions[deviceId];
         auction.deviceOwner = msg.sender;
         auction.startTime = startTime;
-        auction.endTime = startTime + duration;
+        auction.endTime = endTime;
         auction.minBid = minBid;
         auction.active = true;
+        auction.biddingEndTime = biddingEndTime;
 
-        emit AuctionCreated(deviceId, msg.sender, startTime, startTime + duration, minBid);
+        emit AuctionCreated(deviceId, msg.sender, startTime, endTime, minBid, biddingEndTime);
     }
 
     /**
      * @dev Place a bid on an active auction
      * @param deviceId Device being auctioned
      */
-    function placeBid(bytes32 deviceId) external payable whenNotPaused auctionExists(deviceId) nonReentrant {
+    function placeBid(bytes32 deviceId) external payable whenNotPaused auctionExists(deviceId) nonReentrant validBiddingPeriod(deviceId) {
         Auction storage auction = auctions[deviceId];
-        
-        // Check if auction is in valid bidding period
-        require(block.timestamp >= auction.startTime, "Auction has not started");
-        require(block.timestamp <= auction.endTime, "Bidding period has ended");
         
         // Validate bid amount
         if (auction.highestBid > 0) {
@@ -126,7 +132,7 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
     function finalizeAuction(bytes32 deviceId) external nonReentrant auctionExists(deviceId) {
         Auction storage auction = auctions[deviceId];
         
-        require(block.timestamp > auction.endTime, "Auction has not ended");
+        require(block.timestamp > auction.biddingEndTime, "Bidding period has not ended");
         require(auction.highestBidder != address(0), "No bids placed");
         require(auction.active, "Auction already finalized");
 
@@ -168,6 +174,7 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
      * @return highestBidder Current highest bidder
      * @return highestBid Current highest bid amount
      * @return active Whether the auction is active
+     * @return biddingEndTime When bidding ends (before slot starts)
      */
     function getAuction(bytes32 deviceId) external view returns (
         address deviceOwner,
@@ -176,7 +183,8 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
         uint256 minBid,
         address highestBidder,
         uint256 highestBid,
-        bool active
+        bool active,
+        uint256 biddingEndTime
     ) {
         Auction storage auction = auctions[deviceId];
         return (
@@ -186,7 +194,8 @@ contract DADIAuction is ReentrancyGuard, Pausable, Ownable {
             auction.minBid,
             auction.highestBidder,
             auction.highestBid,
-            auction.active
+            auction.active,
+            auction.biddingEndTime
         );
     }
 

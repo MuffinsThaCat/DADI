@@ -14,6 +14,7 @@ class Auction {
   final bool isFinalized;
   final bool isUserCreated;
   final List<DeviceControlSlot> controlSlots;
+  final Map<String, dynamic> additionalData;
 
   Auction({
     required this.deviceId,
@@ -27,6 +28,7 @@ class Auction {
     required this.isFinalized,
     required this.isUserCreated,
     List<DeviceControlSlot>? controlSlots,
+    this.additionalData = const {},
   }) : controlSlots = controlSlots ?? [];
 
   /// Create an Auction from blockchain data
@@ -109,6 +111,7 @@ class Auction {
         isFinalized: isFinalized,
         isUserCreated: isUserCreated, // Make sure we set the user created flag
         controlSlots: data['controlSlots'] != null ? data['controlSlots'].map((slot) => DeviceControlSlot.fromJson(slot)).toList() : [],
+        additionalData: data['additionalData'] ?? {},
       );
     } catch (e) {
       // If anything goes wrong, throw a more descriptive error
@@ -214,6 +217,7 @@ class Auction {
     bool? isFinalized,
     bool? isUserCreated,
     List<DeviceControlSlot>? controlSlots,
+    Map<String, dynamic>? additionalData,
   }) {
     return Auction(
       deviceId: deviceId ?? this.deviceId,
@@ -227,6 +231,7 @@ class Auction {
       isFinalized: isFinalized ?? this.isFinalized,
       isUserCreated: isUserCreated ?? this.isUserCreated,
       controlSlots: controlSlots ?? this.controlSlots,
+      additionalData: additionalData ?? this.additionalData,
     );
   }
 
@@ -234,6 +239,6 @@ class Auction {
   String toString() {
     return 'Auction{deviceId: $deviceId, owner: $owner, startTime: $startTime, endTime: $endTime, '
            'minimumBid: $minimumBid, highestBid: $highestBid, highestBidder: $highestBidder, '
-           'isActive: $isActive, isFinalized: $isFinalized, isUserCreated: $isUserCreated, controlSlots: $controlSlots}';
+           'isActive: $isActive, isFinalized: $isFinalized, isUserCreated: $isUserCreated, controlSlots: $controlSlots, additionalData: $additionalData}';
   }
 }

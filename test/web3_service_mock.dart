@@ -35,9 +35,10 @@ class MockWeb3Service extends Mock implements Web3Service {
   Future<OperationResult<double>> placeBidNew({
     required String deviceId,
     required double amount,
+    String uiSignature = '',
   }) async {
     return super.noSuchMethod(
-      Invocation.method(#placeBidNew, [], {#deviceId: deviceId, #amount: amount}),
+      Invocation.method(#placeBidNew, [], {#deviceId: deviceId, #amount: amount, #uiSignature: uiSignature}),
       returnValue: Future.value(OperationResult<double>.success(
         data: amount,
         message: 'Bid placed successfully',

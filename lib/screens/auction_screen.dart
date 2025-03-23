@@ -41,6 +41,8 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
   final List<int> _slotDurations = [15, 30, 45, 60, 90, 120, 240]; // In minutes
   int _selectedSlotDuration = 60; // Default: 1 hour
   final List<Map<String, dynamic>> _pendingTransactions = [];
+  bool _isWarningVisible = true; // Controls blinking effect for auction warnings
+  Timer? _warningBlinkTimer;
 
   // Initialize controllers and fetch auctions
   @override
@@ -91,6 +93,15 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
 
     // Update any pending transactions
     _updatePendingTransactions();
+
+    // Setup blinking timer for warnings
+    _warningBlinkTimer = Timer.periodic(const Duration(milliseconds: 600), (timer) {
+      if (mounted) {
+        setState(() {
+          _isWarningVisible = !_isWarningVisible; // Toggle visibility for blinking effect
+        });
+      }
+    });
 
     // Schedule initialization after the widget is fully built
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -178,6 +189,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
     _minimumBidController.dispose();
     _tabController.dispose();
     _scrollController.dispose();
+    _warningBlinkTimer?.cancel();
     super.dispose();
   }
 
@@ -556,6 +568,21 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
             }
           }
 
+          // Check for actual slot times in additionalData (used by multi-slot auctions)
+          if (auctionMap['additionalData'] != null && 
+              auctionMap['additionalData']['actualSlotStartTime'] != null && 
+              auctionMap['additionalData']['actualSlotEndTime'] != null) {
+            
+            try {
+              // Use the actual slot times for display
+              startTime = DateTime.parse(auctionMap['additionalData']['actualSlotStartTime']);
+              endTime = DateTime.parse(auctionMap['additionalData']['actualSlotEndTime']);
+              _log('Using actual slot times from additionalData: $startTime - $endTime');
+            } catch (e) {
+              _log('Error parsing actual slot times: $e');
+            }
+          }
+
           // Parse bids
           double minimumBid = 0.0;
           double highestBid = 0.0;
@@ -588,6 +615,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
             isActive: isActive,
             isFinalized: isFinalized,
             isUserCreated: isUserCreated,
+            additionalData: auctionMap['additionalData'] ?? {},
           );
 
           _log('Created auction: ${auction.deviceId} (${auction.startTime} - ${auction.endTime})');
@@ -843,9 +871,49 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
               itemBuilder: (context, index) {
                 final slot = slots[index];
                 final now = DateTime.now();
-                final isActive = slot.startTime.isBefore(now) && slot.endTime.isAfter(now);
-                final hasEnded = slot.endTime.isBefore(now);
-
+                
+                // Use the actual slot times from additionalData if available
+                DateTime slotStartTime = slot.startTime;
+                DateTime slotEndTime = slot.endTime;
+                
+                if (slot.additionalData.containsKey('actualSlotStartTime') && 
+                    slot.additionalData.containsKey('actualSlotEndTime')) {
+                  try {
+                    slotStartTime = DateTime.parse(slot.additionalData['actualSlotStartTime']);
+                    slotEndTime = DateTime.parse(slot.additionalData['actualSlotEndTime']);
+                    
+                    // Ensure slot is exactly 5 minutes long regardless of what's stored
+                    // This fixes any potential rounding errors in datetime calculations
+                    slotEndTime = slotStartTime.add(const Duration(minutes: 5));
+                    
+                    _log('Using actual slot times: $slotStartTime - $slotEndTime');
+                  } catch (e) {
+                    _log('Error parsing actual slot times: $e');
+                  }
+                } else {
+                  // For legacy auctions, ensure displayed duration is 5 minutes
+                  slotEndTime = slotStartTime.add(const Duration(minutes: 5));
+                  _log('Using default 5-minute slot: $slotStartTime - $slotEndTime');
+                }
+                
+                // Check if bidding has ended based on the biddingEndTime from the smart contract
+                bool hasBiddingEnded = false;
+                if (slot.additionalData.containsKey('biddingEndTime')) {
+                  // Use biddingEndTime from contract if available
+                  final DateTime biddingEndTime = DateTime.parse(slot.additionalData['biddingEndTime']);
+                  hasBiddingEnded = now.isAfter(biddingEndTime);
+                  _log('Bidding end time from contract: $biddingEndTime, has ended: $hasBiddingEnded');
+                } else {
+                  // Fallback: Use the standard 5-minute before start rule
+                  final DateTime estimatedBiddingEndTime = slotStartTime.subtract(const Duration(minutes: 5));
+                  hasBiddingEnded = now.isAfter(estimatedBiddingEndTime);
+                  _log('Using estimated bidding end time: $estimatedBiddingEndTime, has ended: $hasBiddingEnded');
+                }
+                
+                // Check if the slot is currently active or has ended based on actual slot times
+                final isActive = slotStartTime.isBefore(now) && slotEndTime.isAfter(now);
+                final hasEnded = slotEndTime.isBefore(now);
+                
                 return Card(
                   margin: const EdgeInsets.only(bottom: 8),
                   color: isActive
@@ -894,11 +962,43 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Slot ${index + 1}: ${_formatDateTime(slot.startTime)} - ${_formatDateTime(slot.endTime)}',
+                                'Slot ${index + 1}: ${_formatDateTime(slotStartTime)} - ${_formatDateTime(slotEndTime)} (5m)',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
+                              
+                              // Add a warning label if we're in the period where bidding might end soon
+                              // Only show if bidding hasn't already ended
+                              if (!hasEnded && !isActive && !hasBiddingEnded && slotStartTime.difference(now).inMinutes < 5)
+                                Container(
+                                  margin: const EdgeInsets.only(top: 4),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.withOpacity(_isWarningVisible ? 0.2 : 0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.warning_amber_rounded,
+                                        color: Colors.red.withOpacity(_isWarningVisible ? 1.0 : 0.5),
+                                        size: 12,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'BIDDING ENDING SOON',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.red,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              
                               const SizedBox(height: 4),
                               Row(
                                 children: [
@@ -925,9 +1025,23 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
                                   ),
 
                                   // Actions
-                                  if (!slot.isFinalized && !hasEnded)
+                                  // Only show bid button for upcoming (not active, not ended) slots that aren't finalized
+                                  if (!slot.isFinalized && !hasEnded && !isActive)
                                     ElevatedButton(
-                                      onPressed: () => _bidOnAuction(slot),
+                                      onPressed: hasBiddingEnded ? null : () {
+                                        final slotTimeRemaining = slotStartTime.difference(now);
+                                        
+                                        if (hasBiddingEnded || slotTimeRemaining.inMinutes < 1) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(
+                                              content: Text('Bidding has ended for this slot'),
+                                              backgroundColor: Colors.red,
+                                            ),
+                                          );
+                                        } else {
+                                          _bidOnAuction(slot);
+                                        }
+                                      },
                                       style: ElevatedButton.styleFrom(
                                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                                         textStyle: const TextStyle(fontSize: 12),
@@ -974,6 +1088,10 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
         ),
       ),
     );
+  }
+
+  int _calculateDurationInMinutes(DateTime startTime, DateTime endTime) {
+    return endTime.difference(startTime).inMinutes;
   }
 
   /// Method to refresh auction data
@@ -1043,8 +1161,11 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
 
   /// Format a DateTime for display
   String _formatDateTime(DateTime dateTime) {
-    // For slot display, only show hours and minutes to make the 5-minute increments clear
-    return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+    // For slot display, show hours and minutes but also add a more detailed format with seconds
+    // This helps debug if slots are actually 5 minutes apart
+    final time = '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+    _log('Formatting time: $dateTime -> $time');
+    return time;
   }
 
   /// Format a value to ETH, handling both BigInt (wei) and double (already in ETH) values
@@ -1360,7 +1481,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
     }
   }
 
-  /// Finalize an auction (called when auction ends)
+  /// Method to handle finalizing an auction
   Future<void> _finalizeAuction(Web3Service web3, String deviceId) async {
     setState(() {
       _isLoading = true;

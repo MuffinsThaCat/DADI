@@ -1,4 +1,5 @@
 import 'dart:developer' as developer;
+import 'dart:math' as math;
 import '../models/auction.dart';
 import '../models/device_control_slot.dart';
 import '../models/operation_result.dart';
@@ -41,29 +42,46 @@ class MultiSlotAuctionService {
       _log('  Using fixed 5-minute slots');
       _log('  Total 5-minute slots: $totalSlots');
       
-      // Calculate slot durations
+      // Calculate slot durations with fixed and consistent spacing
       final List<DateTime> slotStartTimes = [];
+      final List<DateTime> slotEndTimes = [];
       
       // Create all the slots
       for (int i = 0; i < totalSlots; i++) {
+        // Each slot is exactly 5 minutes with no overlap
         final slotStartTime = startTime.add(Duration(minutes: i * fixedSlotDurationMinutes));
+        final slotEndTime = slotStartTime.add(Duration(minutes: fixedSlotDurationMinutes));
+        
         slotStartTimes.add(slotStartTime);
+        slotEndTimes.add(slotEndTime);
         
         // Create unique slot ID that includes the session ID and slot number
-        // Format: sessionName-session-timestamp-slot-i
-        final slotId = '$sessionName-session-${DateTime.now().millisecondsSinceEpoch}-slot-$i';
+        final slotId = '$sessionId-slot-$i';
+        
+        // Generate a random buffer between 1-5 minutes
+        final random = math.Random();
+        final biddingEndBuffer = random.nextInt(5) + 1; // 1-5 minutes
+        
+        // Calculate bidding end time (1-5 minutes before slot starts)
+        final biddingEndTime = slotStartTime.subtract(Duration(minutes: biddingEndBuffer));
         
         _log('Creating slot $i:');
         _log('  Slot ID: $slotId');
-        _log('  Start Time: $slotStartTime');
-        _log('  Duration: $fixedSlotDurationMinutes minutes');
+        _log('  Slot Start Time: $slotStartTime');
+        _log('  Slot End Time: $slotEndTime');
+        _log('  Slot Duration: $fixedSlotDurationMinutes minutes');
+        _log('  Bidding End Buffer: $biddingEndBuffer minutes (random 1-5 minutes)');
+        _log('  Bidding End Time: $biddingEndTime');
         
+        // Store actual slot duration in additionalData, but bidding ends early
+        // The blockchain auction runs from biddingEndTime to slotStartTime (when bidding is active)
         final result = await _web3Service.createAuction(
           deviceId: slotId,
-          startTime: slotStartTime,
-          duration: fixedSlotDurationMinutes, 
+          startTime: biddingEndTime, // Bidding starts whenever the auction is created
+          duration: _calculateMinutesBetween(biddingEndTime, slotStartTime), // Duration until slot starts
           minimumBid: minimumBid,
           isUserCreated: true,
+          biddingEndBufferMinutes: biddingEndBuffer, // Pass the random buffer to the contract
           // Add session metadata for proper grouping in the creator dashboard
           additionalData: {
             'sessionId': sessionId,
@@ -71,6 +89,9 @@ class MultiSlotAuctionService {
             'slotNumber': i,
             'slotCount': totalSlots,
             'isSession': false,
+            'actualSlotStartTime': slotStartTime.toIso8601String(),
+            'actualSlotEndTime': slotEndTime.toIso8601String(),
+            'biddingEndBuffer': biddingEndBuffer,
           },
         );
         
@@ -116,9 +137,13 @@ class MultiSlotAuctionService {
     final compositeId = DeviceSlotIdentifier.generateSlotDeviceId(deviceId, slotStartTime);
     _log('Placing bid on slot with composite ID: $compositeId, amount: $amount');
     
+    // Generate UI signature to validate this is a legitimate bid from our UI
+    final uiSignature = _web3Service.generateUISignature(compositeId);
+    
     final result = await _web3Service.placeBidNew(
       deviceId: compositeId,
       amount: amount,
+      uiSignature: uiSignature, // Add UI signature
     );
     
     return result;
@@ -186,6 +211,11 @@ class MultiSlotAuctionService {
       endTime: auction.endTime,
       isAvailable: !auction.isFinalized,
     )).toList();
+  }
+  
+  /// Calculate minutes between two DateTime objects
+  int _calculateMinutesBetween(DateTime start, DateTime end) {
+    return end.difference(start).inMinutes;
   }
   
   void _log(String message) {
