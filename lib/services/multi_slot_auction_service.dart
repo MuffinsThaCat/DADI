@@ -32,21 +32,21 @@ class MultiSlotAuctionService {
     _log('  Minimum Bid: $minimumBid ETH');
     
     try {
+      // Enforce 5-minute slots regardless of input parameter
+      final int fixedSlotDurationMinutes = 5;
+      
+      // Calculate total number of 5-minute slots based on the requested duration
+      final int totalSlots = (slotDurationMinutes * slotCount) ~/ fixedSlotDurationMinutes;
+      
+      _log('  Using fixed 5-minute slots');
+      _log('  Total 5-minute slots: $totalSlots');
+      
       // Calculate slot durations
       final List<DateTime> slotStartTimes = [];
-      final int slotDurationHours = slotDurationMinutes ~/ 60;
-      final int slotDurationRemainingMinutes = slotDurationMinutes % 60;
-      
-      // If we have remaining minutes, we need to round up to the nearest hour for compatibility
-      final int adjustedSlotDurationHours = slotDurationRemainingMinutes > 0 
-          ? slotDurationHours + 1 
-          : slotDurationHours;
-      
-      _log('  Adjusted slot duration: $adjustedSlotDurationHours hours');
       
       // Create all the slots
-      for (int i = 0; i < slotCount; i++) {
-        final slotStartTime = startTime.add(Duration(minutes: i * slotDurationMinutes));
+      for (int i = 0; i < totalSlots; i++) {
+        final slotStartTime = startTime.add(Duration(minutes: i * fixedSlotDurationMinutes));
         slotStartTimes.add(slotStartTime);
         
         // Create unique slot ID that includes the session ID and slot number
@@ -56,12 +56,12 @@ class MultiSlotAuctionService {
         _log('Creating slot $i:');
         _log('  Slot ID: $slotId');
         _log('  Start Time: $slotStartTime');
-        _log('  Duration: $adjustedSlotDurationHours hours');
+        _log('  Duration: $fixedSlotDurationMinutes minutes');
         
         final result = await _web3Service.createAuction(
           deviceId: slotId,
           startTime: slotStartTime,
-          duration: adjustedSlotDurationHours,
+          duration: fixedSlotDurationMinutes, 
           minimumBid: minimumBid,
           isUserCreated: true,
           // Add session metadata for proper grouping in the creator dashboard
@@ -69,7 +69,7 @@ class MultiSlotAuctionService {
             'sessionId': sessionId,
             'sessionName': sessionName,
             'slotNumber': i,
-            'slotCount': slotCount,
+            'slotCount': totalSlots,
             'isSession': false,
           },
         );
@@ -83,7 +83,7 @@ class MultiSlotAuctionService {
         }
       }
       
-      _log('✅ All $slotCount slots created successfully');
+      _log('✅ All $totalSlots slots created successfully');
       
       // Debug: Get the IDs of all active auctions before refresh
       _log('Active auctions before refresh: ${_web3Service.activeAuctions.keys.join(', ')}');
@@ -96,7 +96,7 @@ class MultiSlotAuctionService {
       
       return OperationResult(
         success: true,
-        message: 'Successfully created $slotCount auction slots',
+        message: 'Successfully created $totalSlots auction slots',
       );
     } catch (e) {
       _log('❌ Error creating multi-slot auction: $e');

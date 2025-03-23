@@ -34,7 +34,7 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
   DeviceControlSlot? _selectedTimeSlot;
   List<DeviceControlSlot> _controlSlots = [];
   Timer? _refreshTimer;
-  int _slotDurationMinutes = 2; // Default to 2 minutes
+  int _slotDurationMinutes = 5; // Fixed to 5 minutes for consistent slot duration
 
   @override
   void initState() {
@@ -60,13 +60,16 @@ class AuctionDetailScreenState extends State<AuctionDetailScreen> {
     // Get the total auction duration in minutes
     final totalDurationMinutes = _auction.endTime.difference(_auction.startTime).inMinutes;
     
-    // Calculate number of slots based on the selected duration
-    final int numberOfSlots = totalDurationMinutes ~/ _slotDurationMinutes;
+    // Fixed slot duration of 5 minutes
+    final int fixedSlotDurationMinutes = 5;
+    
+    // Calculate number of slots based on the fixed duration
+    final int numberOfSlots = totalDurationMinutes ~/ fixedSlotDurationMinutes;
     
     // Create slots with equal duration
     DateTime slotStart = _auction.startTime;
     for (int i = 0; i < numberOfSlots; i++) {
-      final slotEnd = slotStart.add(Duration(minutes: _slotDurationMinutes));
+      final slotEnd = slotStart.add(Duration(minutes: fixedSlotDurationMinutes));
       
       slots.add(DeviceControlSlot(
         startTime: slotStart,

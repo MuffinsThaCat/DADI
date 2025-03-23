@@ -1043,8 +1043,8 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
 
   /// Format a DateTime for display
   String _formatDateTime(DateTime dateTime) {
-    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} '
-        '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+    // For slot display, only show hours and minutes to make the 5-minute increments clear
+    return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
   }
 
   /// Format a value to ETH, handling both BigInt (wei) and double (already in ETH) values
