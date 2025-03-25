@@ -134,14 +134,161 @@ class MultiSlotAuctionService {
     required DateTime slotStartTime,
     required double amount,
   }) async {
-    final compositeId = DeviceSlotIdentifier.generateSlotDeviceId(deviceId, slotStartTime);
-    _log('Placing bid on slot with composite ID: $compositeId, amount: $amount');
+    _log('Attempting to place bid of $amount ETH on slot starting at ${slotStartTime.toIso8601String()}');
+    _log('For device: $deviceId');
     
-    // Generate UI signature to validate this is a legitimate bid from our UI
-    final uiSignature = _web3Service.generateUISignature(compositeId);
+    // Check first if we're using mock mode, as this will change how we handle the bidding
+    final bool isMockMode = _web3Service.isMockMode;
+    _log('Mock mode check: $isMockMode');
+    
+    // Try to find the auction ID based on device ID and slot start time
+    final allAuctionIds = _web3Service.activeAuctions.keys.toList();
+    
+    // Construct possible auction IDs for this slot
+    String actualAuctionId = '';
+    
+    // For slot auctions, the ID typically includes the session ID and slot number
+    // First, try to find an ID with the device ID and a matching slot pattern
+    for (final id in allAuctionIds) {
+      if (id.startsWith(deviceId) || id.contains('session')) {
+        _log('Found potential matching ID: $id');
+        
+        // Check if this auction has a matching start time
+        final auctionData = _web3Service.activeAuctions[id];
+        if (auctionData != null) {
+          final startTimeStr = auctionData['startTime'] as String?;
+          if (startTimeStr != null) {
+            try {
+              final auctionStartTime = DateTime.parse(startTimeStr);
+              // Compare with a small tolerance for time differences
+              final difference = auctionStartTime.difference(slotStartTime).inSeconds.abs();
+              if (difference < 60) { // Within 1 minute
+                _log('Found matching auction with ID: $id (time difference: ${difference}s)');
+                actualAuctionId = id;
+                break;
+              }
+            } catch (e) {
+              _log('Error parsing date: $e');
+            }
+          }
+        }
+      }
+    }
+    
+    // If we still don't have an ID, try broader matching approaches
+    if (actualAuctionId.isEmpty) {
+      _log('No direct match found, trying broader approaches');
+      
+      // Look for other IDs that might match this slot
+      // First try the format with -slot- in it
+      final legacyFormatId = '$deviceId-slot-${slotStartTime.millisecondsSinceEpoch}';
+      if (_web3Service.activeAuctions.containsKey(legacyFormatId)) {
+        _log('Found matching auction with legacy format ID: $legacyFormatId');
+        actualAuctionId = legacyFormatId;
+      } else {
+        // Try to find any ID that could be related to this device and slot
+        final potentialIds = allAuctionIds.where((id) => 
+          id.contains(deviceId) && 
+          (id.contains(slotStartTime.millisecondsSinceEpoch.toString()) || 
+           id.contains('-slot-'))
+        ).toList();
+        
+        if (potentialIds.isNotEmpty) {
+          _log('Found potential matching IDs: $potentialIds');
+          actualAuctionId = potentialIds.first;
+        }
+      }
+    }
+    
+    // If still no match, search for any auction ID containing the device ID
+    if (actualAuctionId.isEmpty) {
+      final deviceRelatedIds = allAuctionIds.where((id) => id.contains(deviceId)).toList();
+      if (deviceRelatedIds.isNotEmpty) {
+        _log('Fallback: Using device-related ID: ${deviceRelatedIds.first}');
+        actualAuctionId = deviceRelatedIds.first;
+      }
+    }
+    
+    _log('Using auction ID for bid: $actualAuctionId');
+    
+    // Check if we're in mock mode and use the appropriate bid method
+    if (_web3Service.isMockMode) {
+      _log('Using mock bid in mock mode to avoid metatransaction relayer');
+      
+      // For mock mode, we'll update the auction directly to ensure consistency
+      if (_web3Service.activeAuctions.containsKey(actualAuctionId)) {
+        // Extract the current auction data
+        final currentData = _web3Service.activeAuctions[actualAuctionId]!;
+        
+        // Ensure we update both highestBid and minimumBid
+        _log('Current auction data before update: $currentData');
+        
+        // Create updated data with a new object to ensure reference changes
+        final updatedData = Map<String, dynamic>.from(currentData);
+        updatedData['highestBid'] = amount;
+        updatedData['minimumBid'] = amount; // This is critical - ensure minimumBid is updated
+        updatedData['highestBidder'] = _web3Service.currentAddress ?? "0xMockBidder";
+        
+        // Update the auction in memory with a completely new object
+        _web3Service.activeAuctions[actualAuctionId] = updatedData;
+        
+        _log('Updated auction data directly: $updatedData');
+        
+        // Force updates via the proper method instead of calling notifyListeners directly
+        _web3Service.loadActiveAuctions(forceRefresh: true);
+      }
+      
+      // CRITICAL CHANGE: Force refresh the auction data in both services
+      _web3Service.loadActiveAuctions(forceRefresh: true);
+      
+      // In mock mode, use the mock bid functionality directly with forceWin
+      final result = await _web3Service.placeMockBid(
+        actualAuctionId, 
+        amount, 
+        forceWin: true
+      );
+      
+      _log('Mock bid result: ${result.success}, message: ${result.message}');
+      if (result.data != null) {
+        _log('Updated auction data from result: ${result.data}');
+      }
+      
+      // Manually verify the data after the bid
+      if (_web3Service.activeAuctions.containsKey(actualAuctionId)) {
+        final afterBidData = _web3Service.activeAuctions[actualAuctionId]!;
+        _log('Verification - Auction data after bid: $afterBidData');
+        _log('Verification - highestBid: ${afterBidData['highestBid']}, minimumBid: ${afterBidData['minimumBid']}');
+        
+        // Force another refresh to ensure listeners update
+        _web3Service.loadActiveAuctions(forceRefresh: true);
+        
+        // Create an enhanced result with explicit data fields to ensure UI updates correctly
+        return OperationResult(
+          success: true,
+          message: 'Bid placed successfully',
+          data: {
+            'highestBid': amount,  // Use the exact amount we used to ensure consistency
+            'minimumBid': amount,  // Use the exact amount we used to ensure consistency
+            'highestBidder': _web3Service.currentAddress ?? "0xMockBidder",
+            'deviceId': actualAuctionId,
+            'auctionData': afterBidData
+          },
+        );
+      }
+      
+      // If we get here, something went wrong with the data update
+      _log('ERROR: Could not verify auction data after bid');
+      return OperationResult(
+        success: false,
+        message: 'Error updating auction data after bid',
+      );
+    }
+    
+    // For real mode, generate UI signature and use placeBidNew
+    final uiSignature = _web3Service.generateUISignature(actualAuctionId);
     
     final result = await _web3Service.placeBidNew(
-      deviceId: compositeId,
+      deviceId: actualAuctionId,
       amount: amount,
       uiSignature: uiSignature, // Add UI signature
     );

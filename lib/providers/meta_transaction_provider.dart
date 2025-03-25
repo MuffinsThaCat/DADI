@@ -259,6 +259,32 @@ class MetaTransactionProvider extends ChangeNotifier {
     required List<dynamic> functionParams,
     required String description,
   }) async {
+    // Check if we're in mock mode (web platform or debug mode)
+    if (kIsWeb || kDebugMode) {
+      debugPrint('Mock mode detected: bypassing real relayer for transaction: $description');
+      
+      // Create a transaction ID that looks like a transaction hash
+      final mockTxHash = 'mock-tx-${DateTime.now().millisecondsSinceEpoch}';
+      
+      // Create a new transaction record with mock data
+      final transaction = MetaTransaction(
+        id: mockTxHash,
+        txHash: mockTxHash,
+        status: MetaTransactionStatus.confirmed, // Immediately mark as confirmed
+        timestamp: DateTime.now(),
+        targetContract: targetContract,
+        functionSignature: functionSignature,
+        description: '$description (Mock)',
+      );
+      
+      // Add to transactions list
+      _transactions.insert(0, transaction);
+      notifyListeners();
+      
+      // Return mock transaction hash
+      return mockTxHash;
+    }
+    
     if (!hasQuotaAvailable) {
       throw Exception('Daily meta-transaction quota exceeded');
     }

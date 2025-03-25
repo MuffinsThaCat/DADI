@@ -7,6 +7,7 @@ import '../widgets/wavy_background.dart';
 import 'auction_screen.dart';
 import 'wallet_screen.dart';
 import '../services/mock_buttplug_service.dart';
+import 'device_control_screen.dart'; // Add this import
 
 class UserAuctionBrowseScreen extends StatefulWidget {
   const UserAuctionBrowseScreen({Key? key}) : super(key: key);
@@ -117,7 +118,6 @@ class _UserAuctionBrowseScreenState extends State<UserAuctionBrowseScreen> {
             },
             tooltip: web3.isConnected ? 'Disconnect Wallet' : 'Connect Wallet',
           ),
-          // Device connection button
           IconButton(
             icon: Icon(
               buttplugService.isConnected
@@ -508,7 +508,17 @@ class _UserAuctionBrowseScreenState extends State<UserAuctionBrowseScreen> {
     return BottomNavigationBar(
       currentIndex: 0,
       onTap: (index) {
-        // Handle navigation
+        // Handle navigation based on index
+        if (index == 1) {
+          // Navigate to the Device Control screen
+          _navigateToDeviceControlScreen(context);
+        } else if (index == 2) {
+          // Navigate to Settings (placeholder for now)
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Settings coming soon')),
+          );
+        }
+        // For index 0 (Browse), we're already on the correct screen
       },
       items: const [
         BottomNavigationBarItem(
@@ -516,14 +526,36 @@ class _UserAuctionBrowseScreenState extends State<UserAuctionBrowseScreen> {
           label: 'Browse',
         ),
         BottomNavigationBarItem(
-          icon: Icon(Icons.account_balance_wallet),
-          label: 'Wallet',
+          icon: Icon(Icons.touch_app),
+          label: 'Control',
         ),
         BottomNavigationBarItem(
           icon: Icon(Icons.settings),
           label: 'Settings',
         ),
       ],
+    );
+  }
+
+  void _navigateToDeviceControlScreen(BuildContext context) {
+    // For development purposes, always navigate to the device control screen
+    // with mock data, bypassing the requirement to win an auction
+    
+    // Create a mock device ID
+    final deviceId = "mock-device-${DateTime.now().millisecondsSinceEpoch}";
+    
+    // Set end time to 30 minutes from now
+    final endTime = DateTime.now().add(const Duration(minutes: 30));
+    
+    // Navigate to the device control screen
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DeviceControlScreen(
+          deviceId: deviceId,
+          endTime: endTime,
+        ),
+      ),
     );
   }
 

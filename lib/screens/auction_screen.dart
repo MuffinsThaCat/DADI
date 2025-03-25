@@ -11,6 +11,8 @@ import '../services/navigation_service.dart';
 import '../services/web3_service.dart';
 import '../services/multi_slot_auction_service.dart';
 import '../widgets/wavy_background.dart';
+import '../widgets/device_control_notification.dart';
+import 'wallet_screen.dart';
 
 class AuctionScreen extends StatefulWidget {
   final int initialTab;
@@ -43,6 +45,8 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
   final List<Map<String, dynamic>> _pendingTransactions = [];
   bool _isWarningVisible = true; // Controls blinking effect for auction warnings
   Timer? _warningBlinkTimer;
+  Timer? _controlAuctionsTimer;
+  List<Auction> _activeControlAuctions = [];
 
   // Initialize controllers and fetch auctions
   @override
@@ -102,6 +106,13 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
         });
       }
     });
+    
+    // Setup timer to check for active control auctions
+    _controlAuctionsTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (mounted) {
+        _updateActiveControlAuctions();
+      }
+    });
 
     // Schedule initialization after the widget is fully built
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -110,6 +121,9 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
       
       // Refresh data to load actual auctions
       _refreshData(forceRefresh: true);
+      
+      // Check for active control auctions
+      _updateActiveControlAuctions();
     });
   }
 
@@ -190,6 +204,7 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
     _tabController.dispose();
     _scrollController.dispose();
     _warningBlinkTimer?.cancel();
+    _controlAuctionsTimer?.cancel();
     super.dispose();
   }
 
@@ -205,6 +220,26 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
         appBar: AppBar(
           title: const Text('DADI Auctions'),
           actions: [
+            // Wallet button
+            IconButton(
+              icon: Icon(
+                web3.isConnected 
+                    ? Icons.account_balance_wallet 
+                    : Icons.account_balance_wallet_outlined,
+                color: web3.isConnected 
+                    ? Colors.green 
+                    : Colors.white.withOpacity(0.7),
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const WalletScreen(),
+                  ),
+                );
+              },
+              tooltip: web3.isConnected ? 'Wallet Connected' : 'Connect Wallet',
+            ),
             // Network status indicator
             Tooltip(
               message: web3.isMockMode
@@ -258,6 +293,27 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
                 _buildActiveAuctionsTab(),
               ],
             ),
+            
+            // Device control notifications for winning bidders
+            if (_activeControlAuctions.isNotEmpty)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: _activeControlAuctions.map((auction) {
+                        final web3 = Provider.of<Web3Service>(context, listen: false);
+                        return DeviceControlNotification(
+                          auction: auction,
+                          userAddress: web3.currentAddress ?? '',
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ),
 
             // Loading overlay
             if (_isLoading)
@@ -1697,6 +1753,22 @@ class _AuctionScreenState extends State<AuctionScreen> with SingleTickerProvider
           ),
         );
       }
+    }
+  }
+
+  /// Fetch auctions where the user is the winner and can control the device now
+  void _updateActiveControlAuctions() {
+    try {
+      final web3Service = Provider.of<Web3Service>(context, listen: false);
+      final controlAuctions = web3Service.getUserActiveControlAuctions();
+      
+      if (!listEquals(_activeControlAuctions, controlAuctions)) {
+        setState(() {
+          _activeControlAuctions = controlAuctions;
+        });
+      }
+    } catch (e) {
+      _log('Error fetching active control auctions: $e');
     }
   }
 }

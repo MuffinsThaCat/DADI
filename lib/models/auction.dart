@@ -235,6 +235,34 @@ class Auction {
     );
   }
 
+  /// Check if a user is the winner of this auction
+  bool isUserWinner(String userAddress) {
+    return isFinalized && 
+           highestBidder.isNotEmpty && 
+           highestBidder != '0x0000000000000000000000000000000000000000' &&
+           highestBidder.toLowerCase() == userAddress.toLowerCase();
+  }
+
+  /// Check if the auction slot is active now (during the actual control period)
+  bool isActiveNow() {
+    final now = DateTime.now();
+    return now.isAfter(startTime) && now.isBefore(endTime) && isFinalized;
+  }
+  
+  /// Check if a user can control the device now
+  bool canUserControlNow(String userAddress) {
+    return isActiveNow() && isUserWinner(userAddress);
+  }
+
+  /// Calculate the remaining control time
+  Duration getRemainingControlTime() {
+    final now = DateTime.now();
+    if (now.isAfter(endTime)) {
+      return Duration.zero;
+    }
+    return endTime.difference(now);
+  }
+
   @override
   String toString() {
     return 'Auction{deviceId: $deviceId, owner: $owner, startTime: $startTime, endTime: $endTime, '

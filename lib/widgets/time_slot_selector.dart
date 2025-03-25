@@ -49,84 +49,120 @@ class _TimeSlotSelectorState extends State<TimeSlotSelector> {
         if (widget.slots.isEmpty)
           const Padding(
             padding: EdgeInsets.all(8.0),
-            child: Text('No available time slots for this auction'),
+            child: Text('No time slots available for booking.'),
           )
         else
-          Container(
-            height: 120,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: widget.slots.length,
-              itemBuilder: (context, index) {
-                final slot = widget.slots[index];
-                final isSelected = _selectedSlot == slot;
-                final isAvailable = slot.isAvailable;
-                
-                return GestureDetector(
-                  onTap: isAvailable ? () {
-                    setState(() {
-                      _selectedSlot = slot;
-                    });
-                    widget.onSlotSelected?.call(slot);
-                  } : null,
-                  child: Container(
-                    width: 120,
-                    margin: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: isSelected 
-                          ? Theme.of(context).primaryColor.withOpacity(0.2)
-                          : isAvailable 
-                              ? Colors.white 
-                              : Colors.grey.shade200,
-                      border: Border.all(
-                        color: isSelected 
-                            ? Theme.of(context).primaryColor
-                            : Colors.grey.shade300,
-                        width: isSelected ? 2 : 1,
-                      ),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          slot.displayTimeRange,
-                          style: TextStyle(
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            color: isAvailable ? Colors.black : Colors.grey,
+          Column(
+            children: [
+              // Debug info to verify slots
+              Container(
+                padding: const EdgeInsets.all(4.0),
+                margin: const EdgeInsets.only(bottom: 8.0),
+                decoration: BoxDecoration(
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '${widget.slots.length} available slots (5 min each)',
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ),
+              SizedBox(
+                height: 120,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: widget.slots.length,
+                  itemBuilder: (context, index) {
+                    final slot = widget.slots[index];
+                    final isSelected = _selectedSlot == slot;
+                    
+                    // Verify no overlapping slots in UI
+                    if (index > 0) {
+                      final prevSlot = widget.slots[index-1];
+                      if (prevSlot.endTime.isAfter(slot.startTime)) {
+                        print('❌ UI RENDERING OVERLAP: Slot ${index-1} ends after slot $index starts');
+                      }
+                    }
+                    
+                    final startTimeStr = _formatTime(slot.startTime);
+                    final endTimeStr = _formatTime(slot.endTime);
+                    
+                    return GestureDetector(
+                      onTap: () {
+                        if (slot.isAvailable) {
+                          setState(() {
+                            _selectedSlot = slot;
+                          });
+                          if (widget.onSlotSelected != null) {
+                            widget.onSlotSelected!(slot);
+                          }
+                        }
+                      },
+                      child: Container(
+                        width: 100,
+                        margin: const EdgeInsets.only(right: 8.0),
+                        decoration: BoxDecoration(
+                          color: isSelected ? Colors.blue : 
+                                 slot.isAvailable ? Colors.white : Colors.grey.shade300,
+                          borderRadius: BorderRadius.circular(8.0),
+                          border: Border.all(
+                            color: isSelected ? Colors.blue.shade700 : Colors.grey.shade400,
+                            width: isSelected ? 2.0 : 1.0,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${slot.durationMinutes} min',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isAvailable ? Colors.black54 : Colors.grey,
-                          ),
-                        ),
-                        if (!isAvailable)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 4),
-                            child: Text(
-                              'Unavailable',
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              startTimeStr,
                               style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.red,
+                                fontWeight: FontWeight.bold,
+                                color: isSelected ? Colors.white : Colors.black,
                               ),
                             ),
-                          ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'to',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isSelected ? Colors.white70 : Colors.grey,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              endTimeStr,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: isSelected ? Colors.white : Colors.black,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              slot.isAvailable ? 'Available' : 'Unavailable',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: isSelected ? Colors.white : 
+                                      slot.isAvailable ? Colors.green : Colors.red,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
       ],
     );
+  }
+  
+  // Helper to format time in a readable format
+  String _formatTime(DateTime dateTime) {
+    final hour = dateTime.hour.toString().padLeft(2, '0');
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 }
