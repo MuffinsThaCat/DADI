@@ -16,6 +16,16 @@ class WalletServiceWeb extends WalletServiceInterface {
   static const String _walletMnemonicKey = 'wallet_mnemonic_web';
   static const String _walletPasswordHashKey = 'wallet_password_hash_web';
   
+  // P-Chain constants
+  static const String _stakedAmountKey = 'staked_amount_web';
+  static const String _stakingRewardsKey = 'staking_rewards_web';
+  static const String _stakingStatusKey = 'staking_status_web';
+  static const String _stakingStartTimeKey = 'staking_start_time_web';
+  static const String _stakingLockupPeriodKey = 'staking_lockup_period_web';
+  
+  // Creator tiers configuration
+  static const List<double> _creatorTierThresholds = [0, 10, 50, 100, 500]; // AVAX amounts
+  
   // Dependencies
   final Web3Client _web3client;
   late SharedPreferences _prefs;
@@ -680,6 +690,304 @@ class WalletServiceWeb extends WalletServiceInterface {
   Future<bool> isValidAddress(String address) async {
     // Implement address validation logic here
     return true;
+  }
+  
+  @override
+  Future<double> get pChainStakedAmount async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) return 0.0;
+    
+    try {
+      return _prefs.getDouble(_stakedAmountKey) ?? 0.0;
+    } catch (e) {
+      debugPrint('Error getting staked amount: $e');
+      return 0.0;
+    }
+  }
+  
+  @override
+  Future<bool> get isCreatorStakingActive async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) return false;
+    
+    try {
+      final status = _prefs.getBool(_stakingStatusKey) ?? false;
+      final stakedAmount = await pChainStakedAmount;
+      return status && stakedAmount > 0;
+    } catch (e) {
+      debugPrint('Error checking creator staking status: $e');
+      return false;
+    }
+  }
+  
+  @override
+  Future<double> get stakingRewards async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) return 0.0;
+    
+    try {
+      final rewards = _prefs.getDouble(_stakingRewardsKey) ?? 0.0;
+      
+      // In a real implementation, you would calculate real-time rewards
+      // based on staking duration and amount
+      final stakingStartTime = _prefs.getInt(_stakingStartTimeKey) ?? 0;
+      if (stakingStartTime > 0) {
+        final currentTime = DateTime.now().millisecondsSinceEpoch;
+        final stakedDays = (currentTime - stakingStartTime) / (1000 * 60 * 60 * 24);
+        final stakedAmount = await pChainStakedAmount;
+        
+        // Simple rewards calculation - 10% APY
+        final calculatedRewards = (stakedAmount * 0.1 * stakedDays / 365);
+        return rewards + calculatedRewards;
+      }
+      
+      return rewards;
+    } catch (e) {
+      debugPrint('Error getting staking rewards: $e');
+      return 0.0;
+    }
+  }
+  
+  @override
+  Future<int> get creatorTier async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) return 0;
+    
+    try {
+      final stakedAmount = await pChainStakedAmount;
+      
+      // Determine tier based on staked amount
+      for (int i = _creatorTierThresholds.length - 1; i >= 0; i--) {
+        if (stakedAmount >= _creatorTierThresholds[i]) {
+          return i;
+        }
+      }
+      
+      return 0;
+    } catch (e) {
+      debugPrint('Error getting creator tier: $e');
+      return 0;
+    }
+  }
+  
+  @override
+  Future<String> stakeForCreator({
+    required double amount,
+    int? lockupPeriodDays,
+  }) async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) throw Exception('Wallet must be unlocked to stake');
+    
+    try {
+      // Check if user has enough balance
+      final currentBalance = await balance;
+      if (currentBalance < amount) {
+        throw Exception('Insufficient balance to stake');
+      }
+      
+      // Simulate staking transaction - in production, this would interact with P-Chain
+      final txId = 'p-' + DateTime.now().millisecondsSinceEpoch.toString() + 
+                 '-' + math.Random().nextInt(1000000).toString();
+      
+      // Update local storage with staking information
+      final currentStakedAmount = await pChainStakedAmount;
+      final newStakedAmount = currentStakedAmount + amount;
+      
+      await _prefs.setDouble(_stakedAmountKey, newStakedAmount);
+      await _prefs.setBool(_stakingStatusKey, true);
+      
+      // Set staking start time if this is initial stake
+      if (currentStakedAmount <= 0) {
+        await _prefs.setInt(_stakingStartTimeKey, DateTime.now().millisecondsSinceEpoch);
+      }
+      
+      // Set lockup period if provided
+      if (lockupPeriodDays != null) {
+        await _prefs.setInt(_stakingLockupPeriodKey, lockupPeriodDays);
+      }
+      
+      notifyListeners();
+      return txId;
+    } catch (e) {
+      debugPrint('Error staking for creator: $e');
+      throw Exception('Failed to stake: ${e.toString()}');
+    }
+  }
+  
+  @override
+  Future<String> unstakeFromCreator({
+    required double amount,
+  }) async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) throw Exception('Wallet must be unlocked to unstake');
+    
+    try {
+      // Check staking status
+      final isActive = await isCreatorStakingActive;
+      if (!isActive) {
+        throw Exception('No active staking found');
+      }
+      
+      // Check if enough is staked
+      final stakedAmount = await pChainStakedAmount;
+      if (stakedAmount < amount) {
+        throw Exception('Insufficient staked amount');
+      }
+      
+      // Check lockup period
+      final lockupPeriod = _prefs.getInt(_stakingLockupPeriodKey) ?? 0;
+      final stakingStartTime = _prefs.getInt(_stakingStartTimeKey) ?? 0;
+      final currentTime = DateTime.now().millisecondsSinceEpoch;
+      final stakedDays = (currentTime - stakingStartTime) / (1000 * 60 * 60 * 24);
+      
+      if (stakedDays < lockupPeriod) {
+        throw Exception('Staking is still in lockup period. Days remaining: ${lockupPeriod - stakedDays.floor()}');
+      }
+      
+      // Simulate unstaking transaction
+      final txId = 'p-' + DateTime.now().millisecondsSinceEpoch.toString() + 
+                 '-' + math.Random().nextInt(1000000).toString();
+      
+      // Update staked amount
+      final newStakedAmount = stakedAmount - amount;
+      await _prefs.setDouble(_stakedAmountKey, newStakedAmount);
+      
+      // If fully unstaked, reset staking status
+      if (newStakedAmount <= 0) {
+        await _prefs.setBool(_stakingStatusKey, false);
+        await _prefs.setInt(_stakingStartTimeKey, 0);
+        await _prefs.setInt(_stakingLockupPeriodKey, 0);
+      }
+      
+      notifyListeners();
+      return txId;
+    } catch (e) {
+      debugPrint('Error unstaking: $e');
+      throw Exception('Failed to unstake: ${e.toString()}');
+    }
+  }
+  
+  @override
+  Future<String> claimStakingRewards() async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) throw Exception('Wallet must be unlocked to claim rewards');
+    
+    try {
+      // Check if staking is active
+      final isActive = await isCreatorStakingActive;
+      if (!isActive) {
+        throw Exception('No active staking found');
+      }
+      
+      // Get current rewards
+      final rewards = await stakingRewards;
+      if (rewards <= 0) {
+        throw Exception('No rewards available to claim');
+      }
+      
+      // Simulate claiming transaction
+      final txId = 'p-' + DateTime.now().millisecondsSinceEpoch.toString() + 
+                 '-' + math.Random().nextInt(1000000).toString();
+      
+      // Reset rewards
+      await _prefs.setDouble(_stakingRewardsKey, 0.0);
+      
+      notifyListeners();
+      return txId;
+    } catch (e) {
+      debugPrint('Error claiming rewards: $e');
+      throw Exception('Failed to claim rewards: ${e.toString()}');
+    }
+  }
+  
+  @override
+  Future<Map<String, dynamic>> getCreatorProfile() async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) return {'active': false};
+    
+    try {
+      final stakedAmount = await pChainStakedAmount;
+      final isActive = await isCreatorStakingActive;
+      final rewards = await stakingRewards;
+      final tier = await creatorTier;
+      
+      final stakingStartTime = _prefs.getInt(_stakingStartTimeKey) ?? 0;
+      final lockupPeriod = _prefs.getInt(_stakingLockupPeriodKey) ?? 0;
+      
+      // Calculate remaining lockup days
+      int remainingLockupDays = 0;
+      if (stakingStartTime > 0 && lockupPeriod > 0) {
+        final currentTime = DateTime.now().millisecondsSinceEpoch;
+        final stakedDays = (currentTime - stakingStartTime) / (1000 * 60 * 60 * 24);
+        remainingLockupDays = math.max(0, lockupPeriod - stakedDays.floor());
+      }
+      
+      // Calculate platform fee reduction based on tier
+      final feeReduction = tier * 0.5; // 0.5% reduction per tier
+      
+      return {
+        'active': isActive,
+        'address': _currentAddress,
+        'stakedAmount': stakedAmount,
+        'rewards': rewards,
+        'tier': tier,
+        'tierThreshold': tier < _creatorTierThresholds.length - 1 ? _creatorTierThresholds[tier + 1] : null,
+        'stakingSince': stakingStartTime > 0 ? DateTime.fromMillisecondsSinceEpoch(stakingStartTime) : null,
+        'lockupPeriod': lockupPeriod,
+        'remainingLockupDays': remainingLockupDays,
+        'benefits': {
+          'feeReduction': feeReduction,
+          'priorityAuctions': tier >= 2,
+          'customAuctionSettings': tier >= 3,
+          'governanceVoting': tier >= 1,
+        }
+      };
+    } catch (e) {
+      debugPrint('Error getting creator profile: $e');
+      return {'active': false, 'error': e.toString()};
+    }
+  }
+  
+  @override
+  Future<String> transferBetweenChains({
+    required double amount,
+    required bool direction,
+  }) async {
+    await _ensurePrefsInitialized();
+    if (!_isUnlocked) throw Exception('Wallet must be unlocked to transfer between chains');
+    
+    try {
+      // Validate amount
+      if (amount <= 0) {
+        throw Exception('Amount must be greater than 0');
+      }
+      
+      // Check balance based on direction
+      if (direction) { // C→P transfer
+        final cChainBalance = await balance;
+        if (cChainBalance < amount) {
+          throw Exception('Insufficient C-Chain balance');
+        }
+      } else { // P→C transfer
+        final pChainBalance = await pChainStakedAmount;
+        if (pChainBalance < amount) {
+          throw Exception('Insufficient P-Chain balance');
+        }
+      }
+      
+      // Simulate transfer transaction
+      final txId = (direction ? 'c2p-' : 'p2c-') + 
+                 DateTime.now().millisecondsSinceEpoch.toString() + 
+                 '-' + math.Random().nextInt(1000000).toString();
+      
+      // In a real implementation, this would actually interact with Avalanche's cross-chain transfer mechanism
+      
+      notifyListeners();
+      return txId;
+    } catch (e) {
+      debugPrint('Error transferring between chains: $e');
+      throw Exception('Failed to transfer: ${e.toString()}');
+    }
   }
   
   @override

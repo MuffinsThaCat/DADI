@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/web3_service.dart';
-import '../services/mock_buttplug_service.dart';
+import '../services/device_connector_interface.dart';
 import 'auction_screen.dart';
 import 'auction_list_screen.dart';
 import 'settings_screen.dart';
@@ -13,7 +13,7 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final web3 = Provider.of<Web3Service>(context);
-    final buttplug = Provider.of<MockButtplugService>(context);
+    final deviceConnector = Provider.of<DeviceConnectorInterface>(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -25,10 +25,20 @@ class HomeScreen extends StatelessWidget {
             onPressed: () => web3.isConnected ? web3.disconnect() : web3.connect(),
             tooltip: web3.isConnected ? 'Disconnect Wallet' : 'Connect Wallet',
           ),
+          // Device connection button
           IconButton(
-            icon: Icon(buttplug.isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
-            onPressed: () => buttplug.isConnected ? buttplug.disconnect() : buttplug.connect(),
-            tooltip: buttplug.isConnected ? 'Disconnect Device' : 'Connect Device',
+            icon: Icon(deviceConnector.isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
+            onPressed: () {
+              debugPrint('Bluetooth button clicked');
+              if (deviceConnector.isConnected) {
+                debugPrint('Calling disconnect()');
+                deviceConnector.disconnect();
+              } else {
+                debugPrint('Calling connect()');
+                deviceConnector.connect();
+              }
+            },
+            tooltip: deviceConnector.isConnected ? 'Disconnect Device' : 'Connect Device',
           ),
           // Settings button
           IconButton(
@@ -76,7 +86,7 @@ class HomeScreen extends StatelessWidget {
                   ElevatedButton.icon(
                     icon: const Icon(Icons.bluetooth),
                     label: const Text('Connect Device'),
-                    onPressed: buttplug.connect,
+                    onPressed: deviceConnector.connect,
                   ),
                 ],
                 if (web3.isConnected) ...[
@@ -122,7 +132,7 @@ class HomeScreen extends StatelessWidget {
                     ),
                   ),
                 ],
-                if (web3.isConnected && buttplug.isConnected) ...[
+                if (web3.isConnected && deviceConnector.isConnected) ...[
                   const SizedBox(height: 16),
                   ElevatedButton.icon(
                     icon: const Icon(Icons.add),
@@ -230,6 +240,13 @@ class HomeScreen extends StatelessWidget {
                     ),
                     onPressed: () {
                       web3.toggleMockMode();
+                      if (deviceConnector.isConnected) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const SettingsScreen(),
+                          ),
+                        );
+                      }
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(

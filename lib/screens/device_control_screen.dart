@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/mock_buttplug_service.dart';
+import '../services/device_connector_interface.dart';
 import '../widgets/wavy_background.dart';
 
 class DeviceControlScreen extends StatefulWidget {
@@ -43,8 +43,8 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
           // Check if control period has expired
           if (DateTime.now().isAfter(widget.endTime) && _intensity > 0) {
             _intensity = 0;
-            final buttplug = context.read<MockButtplugService>();
-            buttplug.stopVibration();
+            final deviceConnector = context.read<DeviceConnectorInterface>();
+            deviceConnector.stopVibration();
           }
         });
       }
@@ -59,14 +59,14 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
   }
 
   Future<void> _connectToDevice() async {
-    final buttplug = context.read<MockButtplugService>();
+    final deviceConnector = context.read<DeviceConnectorInterface>();
     try {
-      if (!buttplug.isConnected) {
-        await buttplug.connect();
+      if (!deviceConnector.isConnected) {
+        await deviceConnector.connect();
       }
       setState(() {
-        _isConnected = buttplug.isConnected;
-        _currentDeviceId = buttplug.currentDevice;
+        _isConnected = deviceConnector.isConnected;
+        _currentDeviceId = deviceConnector.currentDevice;
       });
     } catch (e) {
       if (mounted) {
@@ -84,18 +84,18 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
 
   void _updateIntensity(double value) {
     setState(() => _intensity = value);
-    final buttplug = context.read<MockButtplugService>();
+    final deviceConnector = context.read<DeviceConnectorInterface>();
     if (value > 0) {
-      buttplug.startVibration(value);
+      deviceConnector.startVibration(value);
     } else {
-      buttplug.stopVibration();
+      deviceConnector.stopVibration();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final buttplug = context.watch<MockButtplugService>();
+    final deviceConnector = context.watch<DeviceConnectorInterface>();
     
     return Scaffold(
       appBar: AppBar(
@@ -129,7 +129,7 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
                 
                 // Control buttons
                 if (_hasControl && _isConnected) 
-                  _buildControlButtons(buttplug),
+                  _buildControlButtons(deviceConnector),
               ],
             ),
           ),
@@ -451,7 +451,7 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
     );
   }
   
-  Widget _buildControlButtons(MockButtplugService buttplug) {
+  Widget _buildControlButtons(DeviceConnectorInterface deviceConnector) {
     final theme = Theme.of(context);
     
     return Row(
@@ -462,7 +462,7 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
           icon: Icons.stop_circle_outlined,
           onPressed: () {
             setState(() => _intensity = 0.0);
-            buttplug.stopVibration();
+            deviceConnector.stopVibration();
           },
           color: theme.colorScheme.error,
         ),
@@ -472,7 +472,7 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
           icon: Icons.wifi_tethering,
           onPressed: () {
             setState(() => _intensity = 0.5);
-            buttplug.startVibration(0.5);
+            deviceConnector.startVibration(0.5);
           },
           color: theme.colorScheme.primary,
         ),
@@ -482,7 +482,7 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
           icon: Icons.power,
           onPressed: () {
             setState(() => _intensity = 1.0);
-            buttplug.startVibration(1.0);
+            deviceConnector.startVibration(1.0);
           },
           color: Colors.purple,
         ),

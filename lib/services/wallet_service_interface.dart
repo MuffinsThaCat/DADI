@@ -81,4 +81,44 @@ abstract class WalletServiceInterface extends ChangeNotifier {
   /// Sign typed data according to EIP-712 standard
   /// Returns the signature as a hex string
   Future<String> signTypedData({required Map<String, dynamic> typedData});
+
+  /// Current staked amount on P-Chain (in AVAX)
+  Future<double> get pChainStakedAmount;
+  
+  /// Whether the wallet has activated creator staking
+  Future<bool> get isCreatorStakingActive;
+  
+  /// Get staking rewards earned (in AVAX)
+  Future<double> get stakingRewards;
+  
+  /// Get creator tier based on staking amount
+  Future<int> get creatorTier;
+
+  /// Stake AVAX to activate creator status
+  /// Returns transaction ID
+  Future<String> stakeForCreator({
+    required double amount,
+    int? lockupPeriodDays,
+  });
+  
+  /// Unstake AVAX from creator program
+  /// Returns transaction ID
+  Future<String> unstakeFromCreator({
+    required double amount,
+  });
+  
+  /// Claim staking rewards
+  /// Returns transaction ID
+  Future<String> claimStakingRewards();
+  
+  /// Get creator profile information including staking details
+  Future<Map<String, dynamic>> getCreatorProfile();
+  
+  /// Transfer tokens between C-Chain and P-Chain
+  /// Direction: true for C→P, false for P→C
+  /// Returns transaction ID
+  Future<String> transferBetweenChains({
+    required double amount,
+    required bool direction,
+  });
 }

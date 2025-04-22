@@ -6,7 +6,7 @@ import '../providers/user_role_provider.dart';
 import '../widgets/wavy_background.dart';
 import 'auction_screen.dart';
 import 'wallet_screen.dart';
-import '../services/mock_buttplug_service.dart';
+import '../services/device_connector_interface.dart';
 import 'device_control_screen.dart'; // Add this import
 
 class UserAuctionBrowseScreen extends StatefulWidget {
@@ -24,7 +24,7 @@ class _UserAuctionBrowseScreenState extends State<UserAuctionBrowseScreen> {
     final theme = Theme.of(context);
     final web3 = Provider.of<Web3Service>(context);
     final roleProvider = Provider.of<UserRoleProvider>(context);
-    final buttplugService = Provider.of<MockButtplugService>(context);
+    final deviceConnector = Provider.of<DeviceConnectorInterface>(context);
     
     // Get all auctions for browsing
     final browseAuctions = web3.activeAuctions.entries
@@ -120,21 +120,21 @@ class _UserAuctionBrowseScreenState extends State<UserAuctionBrowseScreen> {
           ),
           IconButton(
             icon: Icon(
-              buttplugService.isConnected
+              deviceConnector.isConnected
                   ? Icons.bluetooth_connected
                   : Icons.bluetooth,
-              color: buttplugService.isConnected
+              color: deviceConnector.isConnected
                   ? theme.colorScheme.primary
                   : theme.colorScheme.onSurface.withOpacity(0.7),
             ),
             onPressed: () {
-              if (buttplugService.isConnected) {
-                buttplugService.disconnect();
+              if (deviceConnector.isConnected) {
+                deviceConnector.disconnect();
               } else {
-                buttplugService.connect();
+                deviceConnector.connect();
               }
             },
-            tooltip: buttplugService.isConnected
+            tooltip: deviceConnector.isConnected
                 ? 'Disconnect Device'
                 : 'Connect Device',
           ),

@@ -1,0 +1,1612 @@
+import 'dart:async';
+import 'dart:developer' as developer;
+import 'dart:html' as html;
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:js/js_util.dart' as js_util;
+import 'device_connector_interface.dart';
+
+// Custom callback for connection code display - will be set by the settings screen
+typedef ConnectionCodeDisplayCallback = void Function(String connectionCode);
+
+/// Available connection strategies for web implementation
+enum ConnectionStrategy {
+  webBluetooth // Using Web Bluetooth API directly
+}
+
+/// Implementation of [DeviceConnectorInterface] for web platforms
+/// with both WebBluetooth and Feel Technology support
+class DeviceConnectorWeb extends ChangeNotifier implements DeviceConnectorInterface {
+  // Log with timestamp for easier debugging
+  void _log(String message) {
+    if (debugMode) {
+      // Use developer.log instead of print for better debugging
+      developer.log(message, name: 'DeviceConnectorWeb');
+    }
+  }
+  
+  // Core state properties
+  bool _isConnected = false;
+  String? _currentDevice;
+  double _currentVibration = 0.0;
+  Timer? _vibrationTimer;
+  
+  // Connection properties
+  bool _isConnectingOrConnected = false;
+  
+  // Connection code display callback
+  static ConnectionCodeDisplayCallback? onConnectionCodeRequested;
+  
+  // Debug mode
+  static bool debugMode = true;
+  
+  // Web Bluetooth specific properties
+  dynamic _bluetoothDevice;
+  dynamic _vibrateCharacteristic;
+  
+  // Feel Technology fallback flag
+  bool _useFeelTechnologyFallback = false;
+  
+  // Page visibility and connection state tracking
+  StreamSubscription<html.Event>? _visibilityChangeSubscription;
+  StreamSubscription<html.Event>? _onlineStateSubscription;
+  bool _wasConnectedBeforeHidden = false;
+  Timer? _reconnectionTimer;
+  int _reconnectionAttempts = 0;
+  final int _maxReconnectionAttempts = 5;
+  
+  // Connection heartbeat timer
+  Timer? _heartbeatTimer;
+  final int _heartbeatIntervalMs = 5000; // 5 seconds
+
+  DeviceConnectorWeb() {
+    // Check if Web Bluetooth is supported but proceed regardless
+    final hasWebBluetooth = _checkWebBluetoothSupport();
+    _log('DeviceConnectorWeb initialized (Web Bluetooth support: $hasWebBluetooth)');
+    
+    // Pre-load Feel Technology JS just in case we need it as fallback
+    _loadFeelTechnologyJs();
+    
+    // Initialize state tracking for better connection reliability
+    _initializeStateTracking();
+  }
+  
+  /// Initialize page visibility and online state tracking
+  void _initializeStateTracking() {
+    // Track page visibility changes
+    _visibilityChangeSubscription = html.document.onVisibilityChange.listen((event) {
+      if (html.document.visibilityState == 'visible') {
+        _log('Page became visible');
+        if (_wasConnectedBeforeHidden && !_isConnected && _bluetoothDevice != null) {
+          _log('Attempting to reconnect after page became visible');
+          _attemptReconnection();
+        }
+      } else if (html.document.visibilityState == 'hidden') {
+        _log('Page hidden');
+        _wasConnectedBeforeHidden = _isConnected;
+      }
+    });
+
+    // Track online/offline status
+    _onlineStateSubscription = html.window.onOnline.listen((event) {
+      _log('Browser came online');
+      if (_wasConnectedBeforeHidden && !_isConnected && _bluetoothDevice != null) {
+        _log('Attempting to reconnect after browser came online');
+        _attemptReconnection();
+      }
+    });
+  }
+  
+  /// Loads the Feel Technology JavaScript library
+  void _loadFeelTechnologyJs() {
+    try {
+      // Check if script is already loaded
+      if (js_util.hasProperty(html.window, 'feelConnect')) {
+        _log('Feel Technology JS already loaded');
+        return;
+      }
+      
+      _log('Loading Feel Technology JS library...');
+      final script = html.ScriptElement()
+        ..type = 'text/javascript'
+        ..src = 'https://api.feel-app.com/static/feeljs/1.0/feel.min.js';
+        
+      // Set up load and error handlers
+      script.onLoad.listen((event) {
+        _log('Feel Technology JS library loaded successfully');
+      });
+      
+      script.onError.listen((event) {
+        _log('Error loading Feel Technology JS library');
+      });
+      
+      // Add the script to the document head
+      html.document.head?.append(script);
+    } catch (e) {
+      _log('Error setting up Feel Technology JS: $e');
+    }
+  }
+  
+  // Interface properties implementation
+  @override
+  bool get isConnected => _isConnected;
+  
+  @override
+  String? get currentDevice => _currentDevice;
+  
+  @override
+  double get currentVibration => _currentVibration;
+  
+  // Enhanced check for Web Bluetooth API support across browsers
+  bool _checkWebBluetoothSupport() {
+    try {
+      // First check if navigator.bluetooth exists
+      final hasWebBluetooth = js_util.hasProperty(html.window.navigator, 'bluetooth');
+      
+      // More detailed browser detection
+      String browserDetails = '';
+      final userAgent = html.window.navigator.userAgent.toLowerCase();
+      
+      if (userAgent.contains('chrome')) {
+        browserDetails = 'Chrome (supported)';
+      } else if (userAgent.contains('edge')) {
+        browserDetails = 'Edge (supported)';
+      } else if (userAgent.contains('safari')) {
+        // Safari has limited support starting with iOS 16.4 and macOS 13.3
+        browserDetails = 'Safari (limited support)';
+      } else if (userAgent.contains('firefox')) {
+        browserDetails = 'Firefox (not supported - requires enabling in about:config)';
+      } else {
+        browserDetails = 'Unknown browser';
+      }
+      
+      _log('Web Bluetooth support: $hasWebBluetooth, Browser: $browserDetails');
+      _addConsoleDebug('Web Bluetooth support detected: $hasWebBluetooth, Browser: $browserDetails');
+      
+      return hasWebBluetooth;
+    } catch (e) {
+      _log('Error checking Web Bluetooth support: $e');
+      return false;
+    }
+  }
+  
+  /// This method is maintained for compatibility with settings screen
+  /// It has no effect as we only support Web Bluetooth now
+  void setConnectionStrategy(ConnectionStrategy strategy) {
+    _log('Using Web Bluetooth connection strategy (only option supported)');
+  }
+  
+  // Attempt to reconnect to the last known device
+  Future<void> _attemptReconnection() async {
+    if (_reconnectionTimer != null || _reconnectionAttempts >= _maxReconnectionAttempts || _bluetoothDevice == null) {
+      return;
+    }
+    
+    _log('Attempting device reconnection (attempt ${_reconnectionAttempts + 1}/${_maxReconnectionAttempts})');
+    _addConsoleDebug('Attempting reconnection ${_reconnectionAttempts + 1}/${_maxReconnectionAttempts}');
+    _reconnectionAttempts++;
+    
+    try {
+      // Get the GATT property from the device
+      final gatt = js_util.getProperty(_bluetoothDevice, 'gatt');
+      
+      // Attempt reconnection
+      final server = await js_util.promiseToFuture(
+        js_util.callMethod(gatt, 'connect', [])
+      );
+      
+      _log('Reconnection successful');
+      _addConsoleDebug('Bluetooth reconnection successful');
+      _isConnected = true;
+      _reconnectionAttempts = 0;
+      notifyListeners();
+      
+      // Re-establish characteristic if needed
+      if (_vibrateCharacteristic == null) {
+        _log('Re-establishing vibration characteristic');
+        final services = await _getAvailableServices(server);
+        _log('Services available after reconnection: ${services.length}');
+      }
+    } catch (e) {
+      _log('Reconnection attempt failed: $e');
+      
+      if (_reconnectionAttempts < _maxReconnectionAttempts) {
+        // Exponential backoff for retry (500ms, 1s, 2s, 4s, 8s)
+        final delay = Duration(milliseconds: 500 * (1 << (_reconnectionAttempts - 1)));
+        _log('Will retry in ${delay.inMilliseconds}ms');
+        
+        _reconnectionTimer = Timer(delay, () {
+          _reconnectionTimer = null;
+          _attemptReconnection();
+        });
+      } else {
+        _log('Maximum reconnection attempts reached');
+        _reconnectionAttempts = 0;
+      }
+    }
+  }
+  
+
+  
+  @override
+  Future<void> connect() async {
+    _log('connect() called');
+    
+    if (_isConnected) {
+      _log('Already connected to a device');
+      return;
+    }
+    
+    if (_isConnectingOrConnected) {
+      _log('Connection already in progress');
+      return;
+    }
+    
+    _isConnectingOrConnected = true;
+    
+    try {
+      // First try Web Bluetooth as the primary connection method
+      try {
+        _log('Trying Web Bluetooth connection first...');
+        _addConsoleDebug('Trying Web Bluetooth connection first...');
+        
+        // Attempt connection with Web Bluetooth
+        await _connectWithWebBluetooth();
+        return;
+        
+      } catch (webBluetoothError) {
+        // If Web Bluetooth fails, try Feel Technology as fallback
+        _log('Web Bluetooth failed, falling back to Feel Technology...');
+        _addConsoleDebug('Web Bluetooth failed: ${webBluetoothError.toString().substring(0, webBluetoothError.toString().length > 50 ? 50 : webBluetoothError.toString().length)}');
+        _addConsoleDebug('Trying Feel Technology as fallback...');
+        
+        // Load Feel Technology JS if not already loaded
+        if (!js_util.hasProperty(html.window, 'feelConnect')) {
+          _loadFeelTechnologyJs();
+          // Wait for script to load
+          await Future.delayed(const Duration(seconds: 2));
+        }
+        
+        // Check if Feel Technology is available
+        if (js_util.hasProperty(html.window, 'feelConnect')) {
+          _log('Feel Technology available, using it as fallback method');
+          _addConsoleDebug('Using Feel Technology connection');
+          
+          // Call the Feel.js connect method which shows QR code for mobile connection
+          final connectResult = await js_util.promiseToFuture(js_util.callMethod(
+            html.window, 
+            'feelConnect', 
+            []
+          ));
+          
+          if (connectResult != null) {
+            _useFeelTechnologyFallback = true;
+            _isConnected = true;
+            _currentDevice = 'Feel Technology Device';
+            _isConnectingOrConnected = false;
+            notifyListeners();
+            _log('Connected via Feel Technology');
+            _addConsoleDebug('Connected with Feel Technology fallback');
+            return;
+          }
+        }
+        
+        // If both methods fail, throw a detailed error
+        _log('Both Web Bluetooth and Feel Technology failed');
+        _addConsoleDebug('All connection methods failed');
+        
+        throw Exception('Failed to connect: Both Web Bluetooth and Feel Technology connection methods failed');
+      }
+    } catch (e) {
+      _isConnectingOrConnected = false;
+      
+      // Provide more user-friendly error messages based on error type
+      String userMessage = 'Failed to connect';
+      String debugDetails = e.toString();
+      
+      if (debugDetails.contains('User cancelled')) {
+        userMessage = 'Connection cancelled by user';
+        _log('User cancelled the connection dialog: $e');
+      } else if (debugDetails.contains('NotFoundError')) {
+        userMessage = 'No compatible devices found nearby. Make sure your device is turned on and in range.';
+        _log('No compatible devices found: $e');
+      } else if (debugDetails.contains('NotAllowedError')) {
+        userMessage = 'Permission to use Bluetooth was denied. Please enable Bluetooth permissions for this site.';
+        _log('Bluetooth permission denied: $e');
+      } else if (debugDetails.contains('NetworkError') || debugDetails.contains('timeout')) {
+        userMessage = 'Connection timed out. Please try again and make sure your device is nearby.';
+        _log('Connection timeout: $e');
+      } else {
+        _log('Connection failed with unknown error: $e');
+      }
+      
+      _addConsoleDebug('Connection failed: $userMessage');
+      throw Exception(userMessage);
+    } finally {
+      if (!_isConnected) {
+        _isConnectingOrConnected = false;
+      }
+    }
+  }
+  
+  // Adds browser console debug messages that user can see
+  void _addConsoleDebug(String message) {
+    try {
+      js_util.callMethod(html.window.console, 'log', ['DADI DEBUG: $message']);
+    } catch (e) {
+      // Ignore errors in debug logging
+    }
+  }
+  
+  // Connect using Web Bluetooth API with optimizations for Lovense devices
+  Future<void> _connectWithWebBluetooth() async {
+    _log('Connecting with Web Bluetooth - optimized for Lovense and LVS-Hush devices');
+    _addConsoleDebug('Starting Bluetooth connection process...');
+    
+    try {
+      // Use a more permissive configuration to find ALL compatible devices
+      // This expanded list includes services from various manufacturers
+      final List<String> optionalServices = [
+        // Standard services
+        'battery_service',
+        'device_information',
+        
+        // Standard vibration service
+        '00006000-0000-1000-8000-00805f9b34fb',
+        
+        // Lovense specific services and characteristics
+        '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Service UUID
+        '6e400002-b5a3-f393-e0a9-e50e24dcca9e', // Write characteristic (TX)
+        '6e400003-b5a3-f393-e0a9-e50e24dcca9e', // Read characteristic (RX)
+        
+        // LVS devices - full UUIDs
+        '0000fff0-0000-1000-8000-00805f9b34fb', // Primary LVS-Hush service
+        '0000fff1-0000-1000-8000-00805f9b34fb', // Primary LVS-Hush characteristic
+        '0000fff2-0000-1000-8000-00805f9b34fb', // Secondary characteristic
+        '00001000-0000-1000-8000-00805f9b34fb',
+        'f0000000-0451-4000-b000-000000000000',
+        '0000ff00-0000-1000-8000-00805f9b34fb',
+        '0000ffe0-0000-1000-8000-00805f9b34fb', // Alternative LVS service
+        '0000ffe1-0000-1000-8000-00805f9b34fb', // Alternative LVS characteristic
+        '0000ffe9-0000-1000-8000-00805f9b34fb', // Used by some LVS models
+        
+        // LVS devices - short form UUIDs (crucial for Chrome compatibility)
+        'fff0', // Primary service short form
+        'fff1', // Primary characteristic short form
+        'fff2', // Secondary characteristic
+        'ff00',
+        'ffe0',
+        'ffe1',
+        'ffe9',
+        
+        // Generic attributes and services
+        '00001800-0000-1000-8000-00805f9b34fb', // Generic Access
+        '00001801-0000-1000-8000-00805f9b34fb'  // Generic Attribute
+      ];
+      
+      // Now create the options object with the services list
+      final options = js_util.jsify({
+        'acceptAllDevices': true,
+        'optionalServices': optionalServices,
+      });
+      
+      // Add debug info
+      _addConsoleDebug('Starting device discovery with expanded compatibility');
+      
+      _addConsoleDebug('Requesting device selection dialog...');
+      
+      _log('Requesting Bluetooth device with expanded device support...');
+      
+      // Get the bluetooth object from navigator
+      final bluetooth = js_util.getProperty(html.window.navigator, 'bluetooth');
+      
+      // Call the requestDevice method on the bluetooth object
+      final device = await js_util.promiseToFuture(
+        js_util.callMethod(bluetooth, 'requestDevice', [options])
+      );
+      
+      _bluetoothDevice = device;
+      _currentDevice = js_util.getProperty(device, 'name') as String?;
+      
+      // Get device ID for debugging
+      final deviceId = js_util.getProperty(device, 'id') as String?;
+      
+      _log('Selected device: $_currentDevice, ID: $deviceId');
+      _addConsoleDebug('Device selected: $_currentDevice (ID: $deviceId)');
+      
+      // Connect to GATT server
+      _log('Connecting to GATT server...');
+      // Get the GATT property from the device
+      final gatt = js_util.getProperty(device, 'gatt');
+      
+      // Call connect method on GATT object
+      final server = await js_util.promiseToFuture(
+        js_util.callMethod(gatt, 'connect', [])
+      );
+      _log('Connected to GATT server');
+      _addConsoleDebug('GATT server connection established');
+      
+      // Try to find a compatible service for the device
+      _log('Detecting appropriate services for the device...');
+      
+      // Get all available services
+      final List<dynamic> services = await _getAvailableServices(server);
+      _log('Available services: ${services.length}');
+      
+      // Try different service/characteristic combinations based on device type
+      bool serviceFound = false;
+      
+      // Get device name for device-specific handling
+      final deviceName = js_util.getProperty(_bluetoothDevice, 'name') as String? ?? '';
+      _log('Device name for detection: $deviceName');
+      
+      // Handle LVS-Hush specifically if detected by name
+      if (deviceName.contains('LVS-Hush') || deviceName.contains('Hush')) {
+        _log('LVS-Hush device detected by name, using specialized approach');
+        _addConsoleDebug('LVS-Hush device detected, using specialized connection method');
+      }
+  
+    
+    // Now create the options object with the services list
+    final options = js_util.jsify({
+      'acceptAllDevices': true,
+      'optionalServices': optionalServices,
+    });
+    
+    // Add debug info
+    _addConsoleDebug('Starting device discovery with expanded compatibility');
+    
+    _addConsoleDebug('Requesting device selection dialog...');
+    
+    _log('Requesting Bluetooth device with expanded device support...');
+    
+    // Get the bluetooth object from navigator
+    final bluetooth = js_util.getProperty(html.window.navigator, 'bluetooth');
+    
+    // Call the requestDevice method on the bluetooth object
+    final device = await js_util.promiseToFuture(
+      js_util.callMethod(bluetooth, 'requestDevice', [options])
+    );
+    
+    _bluetoothDevice = device;
+    _currentDevice = js_util.getProperty(device, 'name') as String?;
+    
+    // Get device ID for debugging
+    final deviceId = js_util.getProperty(device, 'id') as String?;
+    
+    _log('Selected device: $_currentDevice, ID: $deviceId');
+    _addConsoleDebug('Device selected: $_currentDevice (ID: $deviceId)');
+    
+    // Connect to GATT server
+    _log('Connecting to GATT server...');
+    // Get the GATT property from the device
+    final gatt = js_util.getProperty(device, 'gatt');
+    
+    // Call connect method on GATT object
+    final server = await js_util.promiseToFuture(
+      js_util.callMethod(gatt, 'connect', [])
+    );
+    _log('Connected to GATT server');
+    _addConsoleDebug('GATT server connection established');
+    
+    // Try to find a compatible service for the device
+    _log('Detecting appropriate services for the device...');
+    
+    // Get all available services
+    final List<dynamic> services = await _getAvailableServices(server);
+    _log('Available services: ${services.length}');
+    
+    // Try different service/characteristic combinations based on device type
+    bool serviceFound = false;
+    
+    // Get device name for device-specific handling
+    final deviceName = js_util.getProperty(_bluetoothDevice, 'name') as String? ?? '';
+    _log('Device name for detection: $deviceName');
+    
+    // Handle LVS-Hush specifically if detected by name
+    if (deviceName.contains('LVS-Hush') || deviceName.contains('Hush')) {
+      _log('LVS-Hush device detected by name, using specialized approach');
+      _addConsoleDebug('LVS-Hush device detected, using specialized connection method');
+      
+      // For LVS-Hush, we'll take a more direct approach with the primary service
+      try {
+        // First try the primary service with short UUID - often works better on Chrome
+        // Try multiple service naming variations - LVS devices sometimes use different formats
+        final serviceIds = [
+          'fff0',                                        // Short form (most common)
+          '0000fff0-0000-1000-8000-00805f9b34fb',        // Full form
+          '0000FFF0-0000-1000-8000-00805F9B34FB',        // Full form with uppercase
+          'FFF0',                                        // Short form uppercase
+          'device.fff0',                                 // Some browser variants
+          // Additional fallbacks based on common LVS patterns
+          'ff00',
+          '0000ff00-0000-1000-8000-00805f9b34fb'
+        ];
+        // Standard services
+        'battery_service',
+        'device_information',
+        
+        // Standard vibration service
+        '00006000-0000-1000-8000-00805f9b34fb',
+        
+        // Lovense specific services and characteristics
+        '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Service UUID
+        '6e400002-b5a3-f393-e0a9-e50e24dcca9e', // Write characteristic (TX)
+        '6e400003-b5a3-f393-e0a9-e50e24dcca9e', // Read characteristic (RX)
+        
+        // LVS devices - full UUIDs
+        '0000fff0-0000-1000-8000-00805f9b34fb', // Primary LVS-Hush service
+        '0000fff1-0000-1000-8000-00805f9b34fb', // Primary LVS-Hush characteristic
+        '0000fff2-0000-1000-8000-00805f9b34fb', // Secondary characteristic
+        '00001000-0000-1000-8000-00805f9b34fb',
+        'f0000000-0451-4000-b000-000000000000',
+        '0000ff00-0000-1000-8000-00805f9b34fb',
+        '0000ffe0-0000-1000-8000-00805f9b34fb', // Alternative LVS service
+        '0000ffe1-0000-1000-8000-00805f9b34fb', // Alternative LVS characteristic
+        '0000ffe9-0000-1000-8000-00805f9b34fb', // Used by some LVS models
+        
+        // LVS devices - short form UUIDs (crucial for Chrome compatibility)
+        'fff0', // Primary service short form
+        'fff1', // Primary characteristic short form
+        'fff2', // Secondary characteristic
+        'ff00',
+        'ffe0',
+        'ffe1',
+        'ffe9',
+          
+        // Generic attributes and services
+        '00001800-0000-1000-8000-00805f9b34fb', // Generic Access
+        '00001801-0000-1000-8000-00805f9b34fb'  // Generic Attribute
+      ];
+      
+      // Now create the options object with the services list
+      final options = js_util.jsify({
+        'acceptAllDevices': true,
+        'optionalServices': optionalServices,
+      });
+      
+      // Add debug info
+      _addConsoleDebug('Starting device discovery with expanded compatibility');
+      
+      _addConsoleDebug('Requesting device selection dialog...');
+      
+      _log('Requesting Bluetooth device with expanded device support...');
+      
+      // Get the bluetooth object from navigator
+      final bluetooth = js_util.getProperty(html.window.navigator, 'bluetooth');
+      
+      // Call the requestDevice method on the bluetooth object
+      final device = await js_util.promiseToFuture(
+        js_util.callMethod(bluetooth, 'requestDevice', [options])
+      );
+      
+      _bluetoothDevice = device;
+      _currentDevice = js_util.getProperty(device, 'name') as String?;
+      
+      // Get device ID for debugging
+      final deviceId = js_util.getProperty(device, 'id') as String?;
+      
+      _log('Selected device: $_currentDevice, ID: $deviceId');
+      _addConsoleDebug('Device selected: $_currentDevice (ID: $deviceId)');
+      
+      // Connect to GATT server
+      _log('Connecting to GATT server...');
+      // Get the GATT property from the device
+      final gatt = js_util.getProperty(device, 'gatt');
+      
+      // Call connect method on GATT object
+      final server = await js_util.promiseToFuture(
+        js_util.callMethod(gatt, 'connect', [])
+      );
+      _log('Connected to GATT server');
+      _addConsoleDebug('GATT server connection established');
+      
+      // Try to find a compatible service for the device
+      _log('Detecting appropriate services for the device...');
+      
+      // Get all available services
+      final List<dynamic> services = await _getAvailableServices(server);
+      _log('Available services: ${services.length}');
+      
+      // Try different service/characteristic combinations based on device type
+      bool serviceFound = false;
+      
+      // Get device name for device-specific handling
+      final deviceName = js_util.getProperty(_bluetoothDevice, 'name') as String? ?? '';
+      _log('Device name for detection: $deviceName');
+      
+      // Handle LVS-Hush specifically if detected by name
+      if (deviceName.contains('LVS-Hush') || deviceName.contains('Hush')) {
+        _log('LVS-Hush device detected by name, using specialized approach');
+        _addConsoleDebug('LVS-Hush device detected, using specialized connection method');
+        
+        // For LVS-Hush, we'll take a more direct approach with the primary service
+        try {
+          // First try the primary service with short UUID - often works better on Chrome
+          // Try multiple service naming variations - LVS devices sometimes use different formats
+          final serviceIds = [
+            'fff0',                                        // Short form (most common)
+            '0000fff0-0000-1000-8000-00805f9b34fb',        // Full form
+            '0000FFF0-0000-1000-8000-00805F9B34FB',        // Full form with uppercase
+            'FFF0',                                        // Short form uppercase
+            'device.fff0',                                 // Some browser variants
+            // Additional fallbacks based on common LVS patterns
+            'ff00',
+            '0000ff00-0000-1000-8000-00805f9b34fb'
+          ];
+          
+          // Similarly try multiple characteristic formats
+          final charIds = [
+            'fff1',                                        // Most common for LVS-Hush
+            '0000fff1-0000-1000-8000-00805f9b34fb',
+            'FFF1',
+            '0000FFF1-0000-1000-8000-00805F9B34FB',
+            // Secondary control characteristics sometimes used
+            'fff2',
+            '0000fff2-0000-1000-8000-00805f9b34fb'
+          ];
+          
+          _log('Trying comprehensive LVS-Hush connection approach with ${serviceIds.length} service variations');
+          _addConsoleDebug('Trying specialized LVS-Hush protocol...');
+          
+          for (final serviceId in serviceIds) {
+            try {
+              _log('Attempting service: $serviceId');
+              final service = await js_util.promiseToFuture(
+                js_util.callMethod(server, 'getPrimaryService', [serviceId])
+              );
+              _log('Found LVS service: $serviceId');
+              
+              for (final charId in charIds) {
+                try {
+                  _log('Trying characteristic: $charId on service $serviceId');
+                  final char = await js_util.promiseToFuture(
+                    js_util.callMethod(service, 'getCharacteristic', [charId])
+                  );
+                  
+                  // Test if we can write to this characteristic
+                  try {
+                    _log('Testing write capability on characteristic $charId');
+                    // Special initialization command for LVS-Hush devices
+                    final initCommand = Uint8List.fromList([0x00]);
+                    
+                    await js_util.promiseToFuture(js_util.callMethod(
+                      char,
+                      'writeValue',
+                      [js_util.jsify(initCommand)]
+                    ));
+                    
+                    _vibrateCharacteristic = char;
+                    _log('Successfully connected to LVS-Hush via $serviceId/$charId!');
+                    _addConsoleDebug('LVS-Hush connection successful!');
+                    serviceFound = true;
+                    break;
+                  } catch (writeError) {
+                    _log('Write test failed on characteristic $charId: $writeError');
+                  }
+                } catch (charError) {
+                  // Continue to next characteristic ID
+                }
+              }
+              
+              if (serviceFound) break;
+            } catch (serviceError) {
+              // Continue to next service ID
+            }
+          }
+        } catch (e) {
+          _log('LVS-Hush specialized approach failed: $e');
+        }
+      }
+      
+      // Thoroughly log all services and characteristics for debugging
+      _log('Performing comprehensive service and characteristic mapping:');
+      _addConsoleDebug('Performing detailed device interface scanning...');
+      
+      try {
+        // Log all available services with enhanced detail
+        for (var svc in services) {
+          var uuid = js_util.getProperty(svc, 'uuid');
+          var isPrimary = js_util.getProperty(svc, 'isPrimary');
+          _log('- Service UUID: $uuid (Primary: $isPrimary)');
+          _addConsoleDebug('Found service: $uuid');
+          
+          // Try to list characteristics for each service with detailed properties
+          try {
+            final chars = await js_util.promiseToFuture(
+              js_util.callMethod(svc, 'getCharacteristics', [])
+            );
+            
+            _log('  Service $uuid has ${chars.length} characteristics');
+            
+            for (var char in chars) {
+              final charUuid = js_util.getProperty(char, 'uuid');
+              final props = js_util.getProperty(char, 'properties');
+              final readable = js_util.getProperty(props, 'read') ?? false;
+              final writable = js_util.getProperty(props, 'write') ?? false;
+              final notify = js_util.getProperty(props, 'notify') ?? false;
+              
+              _log('  - Characteristic: $charUuid (R:$readable,W:$writable,N:$notify)');
+              
+              // If we haven't found a service yet and this characteristic is writable, save it as a candidate
+              if (!serviceFound && writable == true) {
+                _vibrateCharacteristic = char;
+                _log('Saving writable characteristic as candidate: $charUuid');
+                serviceFound = true;
+                _addConsoleDebug('Found compatible control interface!');
+              }
+            }
+          } catch (e) {
+            _log('Error listing characteristics for service $uuid: $e');
+          }
+        }
+      } catch (e) {
+        _log('Error during comprehensive service mapping: $e');
+      }
+      
+      // First try LVS-Hush service (since we're prioritizing it based on the device name)
+      if (deviceName.contains('LVS-Hush') || deviceName.contains('Hush')) {
+        try {
+          // Try the short form UUID first (works better in Chrome)
+          const lvsHushServiceId = 'fff0';
+          _log('Prioritizing LVS-Hush service (short form): $lvsHushServiceId');
+          _addConsoleDebug('Prioritizing LVS-Hush specific service...');
+          
+          final service = await js_util.promiseToFuture(
+            js_util.callMethod(server, 'getPrimaryService', [lvsHushServiceId])
+          );
+          
+          // Try the primary control characteristic
+          const lvsHushCharId = 'fff1';
+          _log('Trying LVS-Hush characteristic: $lvsHushCharId');
+          
+          _vibrateCharacteristic = await js_util.promiseToFuture(
+            js_util.callMethod(service, 'getCharacteristic', [lvsHushCharId])
+          );
+          
+          // Test if we can write to this characteristic
+          final testCommand = Uint8List.fromList([0x00]);
+          await js_util.promiseToFuture(js_util.callMethod(
+            _vibrateCharacteristic,
+            'writeValue',
+            [js_util.jsify(testCommand)]
+          ));
+          
+          _log('Successfully connected to LVS-Hush device!');
+          _addConsoleDebug('LVS-Hush connection successful!');
+          serviceFound = true;
+        } catch (e) {
+          _log('LVS-Hush direct service connection failed, trying alternative methods: $e');
+        }
+      }
+      
+      // If LVS-Hush priority check didn't work, try standard vibration service
+      if (!serviceFound) {
+        try {
+          const vibrationServiceUuid = '00006000-0000-1000-8000-00805f9b34fb';
+          final service = await js_util.promiseToFuture(
+            js_util.callMethod(server, 'getPrimaryService', [vibrationServiceUuid])
+          );
+          
+          const vibrationCharUuid = '00006001-0000-1000-8000-00805f9b34fb';
+          _vibrateCharacteristic = await js_util.promiseToFuture(
+            js_util.callMethod(service, 'getCharacteristic', [vibrationCharUuid])
+          );
+          
+          _log('Using standard vibration service');
+          serviceFound = true;
+        } catch (e) {
+          _log('Standard vibration service not found, trying Lovense service...');
+        }
+      }
+      
+      // Try Lovense service if standard wasn't found
+      if (!serviceFound) {
+        try {
+          const lovenseServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+          final service = await js_util.promiseToFuture(
+            js_util.callMethod(server, 'getPrimaryService', [lovenseServiceUuid])
+          );
+          
+          // Lovense uses TX characteristic for sending commands
+          const lovenseTxCharUuid = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+          _vibrateCharacteristic = await js_util.promiseToFuture(
+            js_util.callMethod(service, 'getCharacteristic', [lovenseTxCharUuid])
+          );
+          
+          _log('Using Lovense service for vibration control');
+          serviceFound = true;
+        } catch (e) {
+          _log('Lovense service not found: $e');
+        }
+      }
+      
+      // Try LVS-specific service UUIDs with enhanced detection for LVS-Hush
+      if (!serviceFound) {
+        try {
+          _log('Attempting specialized detection for LVS devices including Hush...');
+          _addConsoleDebug('Attempting specialized detection for LVS-Hush device...');
+          
+          // Expanded list of LVS service UUIDs with specific focus on Hush models
+          final lvsServiceUuids = [
+            // Common LVS service UUIDs
+            '0000fff0-0000-1000-8000-00805f9b34fb', // Primary service for many LVS devices
+            '0000fff0-0000-1000-8000-00805f9b34fb'.toLowerCase(), // Try lowercase variant
+            'fff0', // Short form service UUID
+            
+            // Secondary LVS service UUIDs
+            '00001000-0000-1000-8000-00805f9b34fb',
+            'f0000000-0451-4000-b000-000000000000',
+            '0000ff00-0000-1000-8000-00805f9b34fb',
+            
+            // Additional UUIDs specific to newer LVS models
+            '00000000-0000-1000-8000-00805f9b34fb',
+            '0000ffe0-0000-1000-8000-00805f9b34fb',
+            '0000ffe9-0000-1000-8000-00805f9b34fb'
+          ];
+          
+          // Known writable characteristic UUIDs for LVS devices
+          final lvsWritableCharUuids = [
+            '0000fff1-0000-1000-8000-00805f9b34fb', // Common TX characteristic
+            '0000fff1-0000-1000-8000-00805f9b34fb'.toLowerCase(),
+            'fff1', // Short form
+            '0000ffe1-0000-1000-8000-00805f9b34fb', // Alternative for some models
+            '0000ffe9-0000-1000-8000-00805f9b34fb'  // Used by Hush models
+          ];
+          
+          // First attempt direct service + characteristic combination for LVS-Hush
+          _log('Trying direct LVS-Hush service+characteristic combinations...');
+          
+          for (final svcUuid in lvsServiceUuids) {
+            try {
+              final service = await js_util.promiseToFuture(
+                js_util.callMethod(server, 'getPrimaryService', [svcUuid])
+              );
+              _log('Found LVS service: $svcUuid');
+              
+              // First try known characteristic UUIDs directly
+              for (final charUuid in lvsWritableCharUuids) {
+                try {
+                  _log('Trying to get characteristic: $charUuid');
+                  final char = await js_util.promiseToFuture(
+                    js_util.callMethod(service, 'getCharacteristic', [charUuid])
+                  );
+                  
+                  // Verify it's writable
+                  final props = js_util.getProperty(char, 'properties');
+                  final canWrite = js_util.getProperty(props, 'write');
+                  
+                  if (canWrite == true) {
+                    _vibrateCharacteristic = char;
+                    _log('Found direct match for LVS device - Service: $svcUuid, Char: $charUuid');
+                    _addConsoleDebug('Found compatible LVS service/characteristic match!');
+                    serviceFound = true;
+                    break;
+                  }
+                } catch (e) {
+                  // Continue trying other characteristic UUIDs
+                  _log('Characteristic $charUuid not found on service $svcUuid');
+                }
+              }
+              
+              if (serviceFound) break;
+              
+              // If direct characteristic access failed, try discovering all characteristics
+              if (!serviceFound) {
+                _log('Discovering all characteristics for service: $svcUuid');
+                final characteristics = await js_util.promiseToFuture(
+                  js_util.callMethod(service, 'getCharacteristics', [])
+                );
+                
+                _log('Found ${characteristics.length} characteristics for service $svcUuid');
+                
+                if (characteristics.length > 0) {
+                  // Log all characteristics for debugging
+                  for (var i = 0; i < characteristics.length; i++) {
+                    try {
+                      final char = characteristics[i];
+                      final charUuid = js_util.getProperty(char, 'uuid');
+                      final props = js_util.getProperty(char, 'properties');
+                      final canWrite = js_util.getProperty(props, 'write');
+                      
+                      _log('Characteristic: $charUuid, Writable: $canWrite');
+                      
+                      if (canWrite == true) {
+                        _vibrateCharacteristic = char;
+                        _log('Found writable characteristic: $charUuid on service $svcUuid');
+                        _addConsoleDebug('Found compatible LVS characteristic!');
+                        serviceFound = true;
+                        break;
+                      }
+                    } catch (e) {
+                      _log('Error inspecting characteristic: $e');
+                    }
+                  }
+                  
+                  // If we found a writable characteristic, break the service loop
+                  if (serviceFound) break;
+                }
+              }
+            } catch (e) {
+              // Continue trying other service UUIDs
+              _log('Service $svcUuid not found or not accessible');
+            }
+          }
+        } catch (e) {
+          _log('Error in enhanced LVS device detection: $e');
+          _addConsoleDebug('Error in LVS device detection process');
+        }
+      }
+      
+      // If we still can't find a service, try the Feel Technology integration as fallback
+      if (!serviceFound) {
+        _log('No compatible vibration service found on device, trying Feel Technology integration...');
+        _addConsoleDebug('No compatible vibration service found, trying Feel Technology...');
+        
+        // Load Feel Technology JS if not already loaded
+        if (!js_util.hasProperty(html.window, 'feelConnect')) {
+          _loadFeelTechnologyJs();
+          // Wait for script to load
+          await Future.delayed(const Duration(seconds: 1));
+        }
+        
+        // Check again after loading
+        if (js_util.hasProperty(html.window, 'feelConnect')) {
+          _log('Feel Technology available, switching to Feel Technology mode');
+          _addConsoleDebug('Feel Technology connected as fallback');
+          _useFeelTechnologyFallback = true;
+          _isConnected = true;
+          _isConnectingOrConnected = false;
+          _currentDevice = 'Feel Technology Device';
+          notifyListeners();
+          return;
+        } else {
+          _log('Feel Technology JS not available after loading attempt');
+          throw Exception('No compatible vibration service found on device. Check device connection or try a different device.');
+        }
+      }
+      
+      _log('Successfully configured vibration control');
+      
+      _isConnected = true;
+      _isConnectingOrConnected = false;
+      notifyListeners();
+      _log('Connected to $_currentDevice via Web Bluetooth');
+      
+      // Start connection heartbeat to maintain reliability
+      _startHeartbeat();
+      
+      // Set up enhanced disconnect listener with automatic reconnection
+      _log('Setting up enhanced disconnect listener with reconnection');
+      final disconnectedFn = js_util.allowInterop(() {
+        _log('Device disconnected');
+        _addConsoleDebug('Bluetooth device disconnected - will attempt reconnection');
+        _isConnected = false;
+        
+        // Don't clear device ID so we can reconnect
+        notifyListeners();
+        
+        // Start reconnection attempts if not already running and if the page is visible
+        if (html.document.visibilityState == 'visible') {
+          _wasConnectedBeforeHidden = true;
+          _reconnectionAttempts = 0;
+          _attemptReconnection();
+        }
+      });
+      
+      js_util.callMethod(device, 'addEventListener', ['gattserverdisconnected', disconnectedFn]);
+    } catch (e) {
+      _log('Error connecting with Web Bluetooth: $e');
+      throw Exception('Web Bluetooth connection failed: $e');
+    }
+  }
+  
+
+
+  // Create a container for displaying the text connection code
+  // This is used when we need to show the user a pairing code
+  html.Element _createConnectionCodeContainer(String connectionCode) {
+    _log('Creating text connection code container');
+    // Remove any existing container
+    final existingContainer = html.document.querySelector('#feel-connection-code-container');
+    if (existingContainer != null) {
+      existingContainer.remove();
+    }
+    
+    // Create a wrapper container
+    final wrapperContainer = html.DivElement()
+      ..id = 'feel-connection-code-container'
+      ..style.position = 'fixed'
+      ..style.top = '0'
+      ..style.left = '0'
+      ..style.width = '100%'
+      ..style.height = '100%'
+      ..style.backgroundColor = 'rgba(0, 0, 0, 0.8)'
+      ..style.display = 'flex'
+      ..style.flexDirection = 'column'
+      ..style.justifyContent = 'center'
+      ..style.alignItems = 'center'
+      ..style.zIndex = '9999';
+      
+    // Create a content container
+    final contentContainer = html.DivElement()
+      ..style.backgroundColor = 'white'
+      ..style.padding = '20px'
+      ..style.borderRadius = '10px'
+      ..style.maxWidth = '90%'
+      ..style.textAlign = 'center';
+      
+    // Create title
+    final title = html.HeadingElement.h2()
+      ..text = 'Connect Your Device'
+      ..style.margin = '0 0 15px 0';
+      
+    // Create subtitle
+    final subtitle = html.ParagraphElement()
+      ..text = 'Enter this code in the FeelConnect app'
+      ..style.margin = '0 0 20px 0';
+      
+    // Create connection code display
+    final codeElement = html.DivElement()
+      ..style.margin = '0 auto 20px auto'
+      ..style.padding = '15px'
+      ..style.backgroundColor = '#f5f5f5'
+      ..style.borderRadius = '5px'
+      ..style.fontSize = '24px'
+      ..style.fontWeight = 'bold'
+      ..style.letterSpacing = '2px'
+      ..text = connectionCode;
+      
+    // Create close button
+    final closeButton = html.ButtonElement()
+      ..text = 'Close'
+      ..style.padding = '10px 20px'
+      ..style.backgroundColor = '#ff5722'
+      ..style.color = 'white'
+      ..style.border = 'none'
+      ..style.borderRadius = '5px'
+      ..style.cursor = 'pointer';
+      
+    // Add event listener to close button
+    closeButton.onClick.listen((event) {
+      _removeConnectionCodeContainer(wrapperContainer);
+    });
+    
+    // Append elements to the content container
+    contentContainer.children.addAll([title, subtitle, codeElement, closeButton]);
+    
+    // Append content container to wrapper
+    wrapperContainer.children.add(contentContainer);
+    
+    // Append to the body
+    html.document.body?.append(wrapperContainer);
+    
+    return wrapperContainer;
+  }
+
+  // Remove connection code container from the DOM
+  // Called when the connection code is no longer needed to be displayed
+  void _removeConnectionCodeContainer(html.Element container) {
+    try {
+      container.remove();
+      _log('Connection code container removed');
+    } catch (e) {
+      _log('Error removing connection code container: $e');
+    }
+  }
+
+  // Generate a random code for testing
+  String _generateRandomCode(int length) {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final random = Random.secure();
+    final code = List.generate(length, (_) => characters[random.nextInt(characters.length)]);
+    return code.join();
+  }
+
+  @override
+  Future<void> disconnect() async {
+    _log('disconnect() called');
+    
+    if (!_isConnected) {
+      _log('No device connected, nothing to disconnect from');
+      return;
+    }
+    
+    // Cancel heartbeat timer
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    
+    await _disconnectFromWebBluetooth();
+    
+    _isConnected = false;
+    _currentDevice = null;
+    _reconnectionAttempts = 0;
+    notifyListeners();
+    
+    _log('Device disconnected successfully');
+  }
+
+  // Disconnect from Web Bluetooth device
+  Future<void> _disconnectFromWebBluetooth() async {
+    if (_bluetoothDevice == null) {
+      _log('No Web Bluetooth device to disconnect from');
+      return;
+    }
+
+    try {
+      _log('Disconnecting from Web Bluetooth device');
+      final gatt = js_util.getProperty(_bluetoothDevice, 'gatt');
+      await js_util.promiseToFuture(
+        js_util.callMethod(gatt, 'disconnect', [])
+      );
+      _log('Disconnected from Web Bluetooth device');
+      _bluetoothDevice = null;
+      _vibrateCharacteristic = null;
+    } catch (e) {
+      _log('Error disconnecting from Web Bluetooth: $e');
+    }
+  }
+
+
+
+  // Helper method to get all available services on a device
+  Future<List<dynamic>> _getAvailableServices(dynamic server) async {
+    try {
+      // This is a workaround as GATT doesn't provide a direct method to list all services
+      // We'll try to get services we expect might be available
+      final List<dynamic> results = [];
+      
+      final commonServiceUuids = [
+        '00006000-0000-1000-8000-00805f9b34fb', // Standard vibration
+        '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Lovense service
+        'battery_service',                       // Battery service
+      ];
+      
+      for (final uuid in commonServiceUuids) {
+        try {
+          final service = await js_util.promiseToFuture(
+            js_util.callMethod(server, 'getPrimaryService', [uuid])
+          );
+          results.add({'uuid': uuid, 'service': service});
+        } catch (e) {
+          // Service not available, continue checking others
+        }
+      }
+      
+      return results;
+    } catch (e) {
+      _log('Error getting available services: $e');
+      return [];
+    }
+  }
+
+  @override
+  Future<void> startVibration(double intensity) async {
+    _log('startVibration($intensity) called');
+    
+    if (!_isConnected) {
+      _log('Cannot start vibration: not connected to a device');
+      throw Exception('Not connected to a device');
+    }
+    
+    // Check if we should use Feel Technology as fallback
+    if (_useFeelTechnologyFallback) {
+      try {
+        _log('Using Feel Technology for vibration (fallback mode)');
+        await _startVibrationWithFeelTechnology(intensity);
+        _currentVibration = intensity;
+        notifyListeners();
+        return;
+      } catch (e) {
+        _log('Feel Technology fallback failed: $e');
+        // Continue with standard methods
+      }
+    }
+    
+    try {
+      final deviceName = _currentDevice?.toLowerCase() ?? '';
+      
+      // Use device-specific vibration method based on device name
+      if (deviceName.contains('hush') || deviceName.contains('lvs')) {
+        // LVS-Hush devices need special handling
+        await _startVibrationWithLvsHush(intensity);
+      } else if (deviceName.contains('lovense')) {
+        // Lovense devices use their own protocol
+        await _startVibrationWithLovense(intensity);
+      } else {
+        // Standard approach for other devices
+        await _startVibrationWithStandardBluetooth(intensity);
+      }
+      
+      _currentVibration = intensity;
+      notifyListeners();
+    } catch (e) {
+      _log('Error starting vibration: $e');
+      
+      // Try Feel Technology as last resort if we have access to it
+      if (js_util.hasProperty(html.window, 'feelConnect')) {
+        try {
+          _log('Trying Feel Technology as last resort for vibration');
+          _useFeelTechnologyFallback = true;
+          await _startVibrationWithFeelTechnology(intensity);
+          _currentVibration = intensity;
+          notifyListeners();
+          return;
+        } catch (e2) {
+          _log('Feel Technology fallback also failed: $e2');
+        }
+      }
+      
+      _currentVibration = 0.0;
+      throw Exception('Failed to start vibration: $e');
+    }
+  }
+
+  // Special method for Lovense devices like Hush
+  Future<void> _startVibrationWithLovense(double intensity) async {
+    _log('Starting vibration with Lovense protocol, intensity: $intensity');
+    _addConsoleDebug('Sending Lovense vibration command...');
+    
+    try {
+      if (_vibrateCharacteristic == null) {
+        _addConsoleDebug('ERROR: No vibration characteristic available!');
+        throw Exception('No vibration characteristic available');
+      }
+      
+      // Lovense devices use a specific command format
+      // Format: Vibrate:Level;\r\n
+      // Convert intensity (0.0-1.0) to Lovense levels (0-20)
+      final level = (intensity * 20).round();
+      
+      // Create Lovense command
+      String command = 'Vibrate:$level;\r\n';
+      _log('Sending Lovense command: $command');
+      _addConsoleDebug('Lovense command: $command');
+      
+      // Convert string to bytes using TextEncoder
+      final encoded = _stringToUint8List(command);
+      
+      // Send command to device
+      await js_util.promiseToFuture(
+        js_util.callMethod(_vibrateCharacteristic, 'writeValue', [encoded])
+      );
+      
+      _log('Lovense vibration command sent successfully');
+      _addConsoleDebug('Vibration command sent successfully');
+    } catch (e) {
+      _log('Error sending Lovense vibration command: $e');
+      _addConsoleDebug('ERROR: Failed to send vibration command: $e');
+      rethrow;
+    }
+  }
+  
+  // Standard method for regular Bluetooth vibration devices
+  Future<void> _startVibrationWithStandardBluetooth(double intensity) async {
+    _log('Starting vibration with standard Bluetooth, intensity: $intensity');
+    
+    try {
+      if (_vibrateCharacteristic == null) {
+        throw Exception('No vibration characteristic available');
+      }
+      
+      // Convert intensity (0.0-1.0) to byte value (0-255)
+      final byteValue = (intensity * 255).round();
+      _log('Setting vibration intensity to: $byteValue');
+      
+      // Create data array
+      final dataArray = js_util.callMethod(html.window, 'Uint8Array.from', [
+        [byteValue]
+      ]);
+      
+      // Send command to device
+      await js_util.promiseToFuture(
+        js_util.callMethod(_vibrateCharacteristic, 'writeValue', [dataArray])
+      );
+      
+      _log('Standard vibration command sent successfully');
+    } catch (e) {
+      _log('Error sending standard vibration command: $e');
+      rethrow;
+    }
+  }
+  
+  // Helper to convert string to Uint8List for Bluetooth commands
+  dynamic _stringToUint8List(String text) {
+    // Use JavaScript's TextEncoder to convert string to bytes
+    final encoder = js_util.callConstructor(
+      js_util.getProperty(html.window, 'TextEncoder'),
+      []
+    );
+    
+    return js_util.callMethod(encoder, 'encode', [text]);
+  }
+  
+  // Specialized method for LVS-Hush devices
+  Future<void> _startVibrationWithLvsHush(double intensity) async {
+    _log('Starting vibration with LVS-Hush specific protocol, intensity: $intensity');
+    _addConsoleDebug('Sending LVS-Hush vibration command...');
+    
+    try {
+      if (_vibrateCharacteristic == null) {
+        _addConsoleDebug('ERROR: No vibration characteristic available for LVS-Hush!');
+        throw Exception('No vibration characteristic available for LVS-Hush');
+      }
+      
+      // LVS-Hush typically accepts multiple command formats
+      // Let's try them in order of most likely to work
+      
+      // 1. Try simple byte value (0-20 range for LVS devices)
+      final byteValue = (intensity * 20).round().clamp(0, 20);
+      _log('Setting LVS-Hush vibration level to: $byteValue');
+      
+      // Create and send simple byte command
+      final simpleCommand = js_util.callMethod(html.window, 'Uint8Array.from', [
+        [byteValue]
+      ]);
+      
+      await js_util.promiseToFuture(
+        js_util.callMethod(_vibrateCharacteristic, 'writeValue', [simpleCommand])
+      );
+      
+      // 2. If intensity > 0, also try text-based command for better compatibility
+      if (intensity > 0) {
+        await Future.delayed(Duration(milliseconds: 100)); // Small delay between commands
+        
+        // Try common LVS command format: "Vibrate:X"
+        final textCommand = "Vibrate:$byteValue";
+        _log('Sending alternative LVS-Hush command: $textCommand');
+        
+        final textBytes = _stringToUint8List(textCommand);
+        
+        await js_util.promiseToFuture(
+          js_util.callMethod(_vibrateCharacteristic, 'writeValue', [textBytes])
+        );
+      }
+      
+      _log('LVS-Hush vibration command(s) sent successfully');
+      _addConsoleDebug('LVS-Hush vibration command sent');
+    } catch (e) {
+      _log('Error sending LVS-Hush vibration command: $e');
+      _addConsoleDebug('ERROR: Failed to send LVS-Hush command: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> stopVibration() async {
+    _log('stopVibration() called');
+    
+    if (!_isConnected) {
+      _log('No device connected, nothing to stop');
+      return;
+    }
+    
+    // Check device type to use appropriate stop method
+    final deviceName = _currentDevice?.toLowerCase() ?? '';
+    
+    if (deviceName.contains('hush') || deviceName.contains('lvs')) {
+      // Use specialized method for LVS-Hush devices
+      _log('Using specialized stop method for LVS-Hush device');
+      await _stopVibrationWithLvsHush();
+    } else {
+      // Standard stop method for other devices
+      await _stopVibrationWithWebBluetooth();
+    }
+    
+    _stopVibration();
+  }
+
+  // Specialized method to stop vibration on LVS-Hush devices
+  Future<void> _stopVibrationWithLvsHush() async {
+    _log('Stopping vibration on LVS-Hush device');
+    _addConsoleDebug('Sending LVS-Hush stop command...');
+    
+    if (_vibrateCharacteristic == null) {
+      _log('No vibration characteristic available for LVS-Hush');
+      return;
+    }
+    
+    try {
+      // LVS-Hush devices typically respond to multiple stop command formats
+      // Let's try them all for maximum compatibility
+      
+      // 1. Try simple zero byte (most common)
+      final zeroCommand = js_util.callMethod(html.window, 'Uint8Array.from', [[0]]);
+      await js_util.promiseToFuture(
+        js_util.callMethod(_vibrateCharacteristic, 'writeValue', [zeroCommand])
+      );
+      
+      // 2. Also try text-based stop command
+      await Future.delayed(Duration(milliseconds: 100)); // Small delay between commands
+      final textCommand = "Vibrate:0";
+      final textBytes = _stringToUint8List(textCommand);
+      
+      await js_util.promiseToFuture(
+        js_util.callMethod(_vibrateCharacteristic, 'writeValue', [textBytes])
+      );
+      
+      _log('LVS-Hush stop commands sent successfully');
+      _addConsoleDebug('LVS-Hush stop command sent');
+    } catch (e) {
+      _log('Error sending LVS-Hush stop command: $e');
+      _addConsoleDebug('ERROR: Failed to send LVS-Hush stop command');
+    }
+  }
+  
+  // Stop vibration with Web Bluetooth
+  Future<void> _stopVibrationWithWebBluetooth() async {
+    if (_vibrateCharacteristic == null) {
+      _log('No vibration characteristic available');
+      return;
+    }
+
+
+    try {
+      _log('Stopping vibration with Web Bluetooth');
+
+      try {
+        // Save the characteristic to a global variable for access from JavaScript
+        js_util.setProperty(html.window, '_vibrateCharacteristic', _vibrateCharacteristic);
+        
+        // Create and inject a script element to execute our Bluetooth code
+        final scriptElement = html.ScriptElement();
+        scriptElement.text = '''
+          (function() {
+            try {
+              // Create data to send - zero value to stop vibration
+              const data = new Uint8Array([0]);
+              
+              // Send the data to the device
+              if (window._vibrateCharacteristic) {
+                console.log('Sending stop command');
+                window._vibrateCharacteristic.writeValueWithoutResponse(data)
+                  .then(() => { console.log('Stop command sent successfully'); })
+                  .catch(e => { console.error('Error sending stop command:', e); });
+              } else {
+                console.error('No vibration characteristic available');
+              }
+            } catch(e) {
+              console.error('Error in stop vibration script:', e);
+            }
+          })();
+        ''';
+        
+        // Add the script to the document
+        html.document.body?.append(scriptElement);
+        
+        // Remove the script after execution
+        Future.delayed(Duration(milliseconds: 100), () {
+          scriptElement.remove();
+        });
+        
+        _log('Stop command sent to device');
+      } catch (e) {
+        _log('Error writing to characteristic: $e');
+        rethrow;
+      }
+
+      // Stop the maintenance timer
+      _vibrationTimer?.cancel();
+      _vibrationTimer = null;
+    } catch (e) {
+      _log('Error stopping vibration: $e');
+    } finally {
+      _currentVibration = 0.0;
+      notifyListeners();
+    }
+  }
+
+  
+  // Helper to stop vibration and update state
+  void _stopVibration() {
+    _currentVibration = 0.0;
+    _vibrationTimer?.cancel();
+    _vibrationTimer = null;
+    notifyListeners();
+  }
+
+  @override
+  Future<List<String>> scanForDevices() async {
+    _log('scanForDevices() called');
+    
+    // Not implemented for web, as the device selection happens during connect()
+    return ['Use connect() to select a device via the browser or Feel Technology'];
+  }
+  
+  @override
+  Future<void> connectToDevice(String deviceId) async {
+    _log('connectToDevice($deviceId) called');
+    
+    // For web, we just use the general connect() method
+    await connect();
+  }
+  
+  // Simple heartbeat to maintain connection
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(Duration(milliseconds: _heartbeatIntervalMs), (timer) {
+      if (!_isConnected) {
+        timer.cancel();
+        return;
+      }
+      _log('Connection heartbeat ping');
+    });
+  }
+  
+  @override
+  void dispose() {
+    // Cancel all event listeners and timers
+    _visibilityChangeSubscription?.cancel();
+    _onlineStateSubscription?.cancel();
+    _reconnectionTimer?.cancel();
+    _vibrationTimer?.cancel();
+    
+    // Disconnect from device if connected
+    if (_isConnected) {
+      disconnect();
+    }
+    
+    super.dispose();
+  }
+
+  /// Start vibration using Feel Technology API
+  Future<void> _startVibrationWithFeelTechnology(double intensity) async {
+    if (!js_util.hasProperty(html.window, 'feelSendCommand')) {
+      throw Exception('Feel Technology API not available');
+    }
+    
+    try {
+      // Convert intensity (0-1) to Feel API intensity format (0-100)
+      final feelIntensity = (intensity * 100).round();
+      
+      // Send vibration command using Feel Technology API
+      await js_util.promiseToFuture(js_util.callMethod(
+        html.window,
+        'feelSendCommand',
+        [js_util.jsify({
+          'command': 'vibrate',
+          'intensity': feelIntensity,
+          'duration': 1000, // 1 second, will be repeated
+        })]
+      ));
+      
+      // Set up repeated vibration to maintain continuous effect
+      _vibrationTimer?.cancel();
+      _vibrationTimer = Timer.periodic(const Duration(milliseconds: 900), (timer) {
+        if (_isConnected && _currentVibration > 0) {
+          // Keep sending commands to maintain vibration
+          _sendFeelVibrationCommand(feelIntensity);
+        } else {
+          _stopVibration();
+        }
+      });
+      
+      return;
+    } catch (e) {
+      _log('Error starting vibration with Feel Technology: $e');
+      throw Exception('Failed to start vibration with Feel Technology: $e');
+    }
+  }
+  
+  /// Helper method to send Feel Technology vibration commands
+  void _sendFeelVibrationCommand(int intensity) {
+    try {
+      js_util.callMethod(
+        html.window,
+        'feelSendCommand',
+        [js_util.jsify({
+          'command': 'vibrate',
+          'intensity': intensity,
+          'duration': 1000,
+        })]
+      );
+    } catch (e) {
+      _log('Error sending Feel vibration command: $e');
+    }
+  }
+}
+
+/// Factory method to create a device connector for web
+DeviceConnectorInterface createDeviceConnector() {
+  return DeviceConnectorWeb();
+}

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/web3_service.dart';
-import '../services/mock_buttplug_service.dart';
+import '../services/device_connector_interface.dart';
 import 'auction_list_screen.dart';
 import 'settings_screen.dart';
 import 'wallet_screen.dart';
@@ -41,7 +41,7 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final web3 = Provider.of<Web3Service>(context);
-    final buttplug = Provider.of<MockButtplugService>(context);
+    final deviceConnector = Provider.of<DeviceConnectorInterface>(context);
     
     return Scaffold(
       appBar: AppBar(
@@ -72,15 +72,15 @@ class _HomeScreenNewState extends State<HomeScreenNew> {
           ),
           IconButton(
             icon: Icon(
-              buttplug.isConnected 
+              deviceConnector.isConnected 
                   ? Icons.bluetooth_connected 
                   : Icons.bluetooth,
-              color: buttplug.isConnected 
+              color: deviceConnector.isConnected 
                   ? theme.colorScheme.primary 
                   : theme.colorScheme.onSurface.withOpacity(0.7),
             ),
-            onPressed: () => buttplug.isConnected ? buttplug.disconnect() : buttplug.connect(),
-            tooltip: buttplug.isConnected ? 'Disconnect Device' : 'Connect Device',
+            onPressed: () => deviceConnector.isConnected ? deviceConnector.disconnect() : deviceConnector.connect(),
+            tooltip: deviceConnector.isConnected ? 'Disconnect Device' : 'Connect Device',
           ),
         ],
       ),

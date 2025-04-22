@@ -35,6 +35,16 @@ class MockWalletService extends WalletServiceInterface {
   bool _simulateTransactionFailure = false;
   int _failureRate = 0; // Percentage chance of transaction failure (0-100)
   
+  // P-Chain mock state
+  double _stakedAmount = 0.0;
+  bool _stakingActive = false;
+  double _stakingRewards = 0.0;
+  DateTime? _stakingSince;
+  int _lockupPeriodDays = 0;
+  
+  // Creator tiers thresholds
+  final List<double> _creatorTierThresholds = [0, 10, 50, 100, 500]; // AVAX amounts
+  
   MockWalletService({this.delayInitialization = false}) {
     // Add some mock transactions
     _addMockTransaction(
@@ -574,5 +584,392 @@ class MockWalletService extends WalletServiceInterface {
   void dispose() {
     // Call super.dispose() as required by @mustCallSuper
     super.dispose();
+  }
+  
+  @override
+  Future<double> get pChainStakedAmount async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      return 0.0;
+    }
+    
+    return _stakedAmount;
+  }
+  
+  @override
+  Future<bool> get isCreatorStakingActive async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      return false;
+    }
+    
+    return _stakingActive && _stakedAmount > 0;
+  }
+  
+  @override
+  Future<double> get stakingRewards async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      return 0.0;
+    }
+    
+    // For testing, we'll simulate some rewards accumulation based on time since staking
+    if (_stakingActive && _stakingSince != null) {
+      final daysSinceStaking = DateTime.now().difference(_stakingSince!).inDays;
+      // Simple 10% APY calculation
+      final calculatedRewards = (_stakedAmount * 0.1 * daysSinceStaking / 365);
+      return _stakingRewards + calculatedRewards;
+    }
+    
+    return _stakingRewards;
+  }
+  
+  @override
+  Future<int> get creatorTier async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      return 0;
+    }
+    
+    // Determine tier based on staked amount
+    for (int i = _creatorTierThresholds.length - 1; i >= 0; i--) {
+      if (_stakedAmount >= _creatorTierThresholds[i]) {
+        return i;
+      }
+    }
+    
+    return 0;
+  }
+  
+  @override
+  Future<String> stakeForCreator({
+    required double amount,
+    int? lockupPeriodDays,
+  }) async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      throw Exception('Wallet is locked');
+    }
+    
+    if (_simulateNetworkError) {
+      throw Exception('Network error while staking');
+    }
+    
+    if (_shouldSimulateFailure()) {
+      throw Exception('Staking transaction failed');
+    }
+    
+    // Check if user has enough balance
+    if (amount > _balance) {
+      throw Exception('Insufficient balance to stake');
+    }
+    
+    // Simulate transaction
+    final txHash = 'p-stake-${DateTime.now().millisecondsSinceEpoch}';
+    
+    // Reduce balance
+    _balance -= amount;
+    
+    // Update staking state
+    _stakedAmount += amount;
+    _stakingActive = true;
+    
+    // Set staking start time if this is initial stake
+    if (_stakingSince == null) {
+      _stakingSince = DateTime.now();
+    }
+    
+    // Set lockup period if provided
+    if (lockupPeriodDays != null) {
+      _lockupPeriodDays = lockupPeriodDays;
+    }
+    
+    // Add transaction to history
+    _addMockTransaction(
+      hash: txHash,
+      from: _currentAddress!,
+      to: 'P-Chain Staking Contract',
+      value: amount,
+      status: 'confirmed',
+      type: 'stake',
+      timestamp: DateTime.now(),
+    );
+    
+    notifyListeners();
+    return txHash;
+  }
+  
+  @override
+  Future<String> unstakeFromCreator({
+    required double amount,
+  }) async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      throw Exception('Wallet is locked');
+    }
+    
+    if (_simulateNetworkError) {
+      throw Exception('Network error while unstaking');
+    }
+    
+    if (_shouldSimulateFailure()) {
+      throw Exception('Unstaking transaction failed');
+    }
+    
+    // Verify staking status
+    if (!_stakingActive) {
+      throw Exception('No active staking found');
+    }
+    
+    // Check if enough is staked
+    if (amount > _stakedAmount) {
+      throw Exception('Requested amount exceeds staked amount');
+    }
+    
+    // Check if in lockup period
+    if (_stakingSince != null && _lockupPeriodDays > 0) {
+      final daysSinceStaking = DateTime.now().difference(_stakingSince!).inDays;
+      if (daysSinceStaking < _lockupPeriodDays) {
+        throw Exception('Staking is still in lockup period. Days remaining: ${_lockupPeriodDays - daysSinceStaking}');
+      }
+    }
+    
+    // Simulate transaction
+    final txHash = 'p-unstake-${DateTime.now().millisecondsSinceEpoch}';
+    
+    // Update staking state
+    _stakedAmount -= amount;
+    if (_stakedAmount <= 0) {
+      _stakingActive = false;
+      _stakingSince = null;
+      _lockupPeriodDays = 0;
+      _stakedAmount = 0;
+    }
+    
+    // Add funds back to balance
+    _balance += amount;
+    
+    // Add transaction to history
+    _addMockTransaction(
+      hash: txHash,
+      from: 'P-Chain Staking Contract',
+      to: _currentAddress!,
+      value: amount,
+      status: 'confirmed',
+      type: 'unstake',
+      timestamp: DateTime.now(),
+    );
+    
+    notifyListeners();
+    return txHash;
+  }
+  
+  @override
+  Future<String> claimStakingRewards() async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      throw Exception('Wallet is locked');
+    }
+    
+    if (_simulateNetworkError) {
+      throw Exception('Network error while claiming rewards');
+    }
+    
+    if (_shouldSimulateFailure()) {
+      throw Exception('Claiming rewards transaction failed');
+    }
+    
+    // Verify staking status
+    if (!_stakingActive) {
+      throw Exception('No active staking found');
+    }
+    
+    // Get current rewards
+    final rewards = await stakingRewards;
+    if (rewards <= 0) {
+      throw Exception('No rewards available to claim');
+    }
+    
+    // Simulate transaction
+    final txHash = 'p-claim-${DateTime.now().millisecondsSinceEpoch}';
+    
+    // Add rewards to balance
+    _balance += rewards;
+    _stakingRewards = 0;
+    
+    // Add transaction to history
+    _addMockTransaction(
+      hash: txHash,
+      from: 'P-Chain Rewards Contract',
+      to: _currentAddress!,
+      value: rewards,
+      status: 'confirmed',
+      type: 'claim_rewards',
+      timestamp: DateTime.now(),
+    );
+    
+    notifyListeners();
+    return txHash;
+  }
+  
+  @override
+  Future<Map<String, dynamic>> getCreatorProfile() async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      return {'active': false};
+    }
+    
+    final rewards = await stakingRewards;
+    final tier = await creatorTier;
+    
+    // Calculate remaining lockup days
+    int remainingLockupDays = 0;
+    if (_stakingSince != null && _lockupPeriodDays > 0) {
+      final daysSinceStaking = DateTime.now().difference(_stakingSince!).inDays;
+      remainingLockupDays = (_lockupPeriodDays - daysSinceStaking) > 0 
+          ? (_lockupPeriodDays - daysSinceStaking) 
+          : 0;
+    }
+    
+    // Calculate platform fee reduction based on tier (0.5% per tier)
+    final feeReduction = tier * 0.5;
+    
+    return {
+      'active': _stakingActive,
+      'address': _currentAddress,
+      'stakedAmount': _stakedAmount,
+      'rewards': rewards,
+      'tier': tier,
+      'tierThreshold': tier < _creatorTierThresholds.length - 1 ? _creatorTierThresholds[tier + 1] : null,
+      'stakingSince': _stakingSince,
+      'lockupPeriod': _lockupPeriodDays,
+      'remainingLockupDays': remainingLockupDays,
+      'benefits': {
+        'feeReduction': feeReduction,
+        'priorityAuctions': tier >= 2,
+        'customAuctionSettings': tier >= 3,
+        'governanceVoting': tier >= 1,
+      }
+    };
+  }
+  
+  @override
+  Future<String> transferBetweenChains({
+    required double amount,
+    required bool direction,
+  }) async {
+    if (delayInitialization) {
+      await _delayCompleter.future;
+    }
+    
+    if (!_isUnlocked) {
+      throw Exception('Wallet is locked');
+    }
+    
+    if (_simulateNetworkError) {
+      throw Exception('Network error during chain transfer');
+    }
+    
+    if (_shouldSimulateFailure()) {
+      throw Exception('Chain transfer transaction failed');
+    }
+    
+    // Validate amount
+    if (amount <= 0) {
+      throw Exception('Amount must be greater than 0');
+    }
+    
+    // Check balance based on direction
+    if (direction) { // C→P transfer (from C-Chain to P-Chain)
+      if (amount > _balance) {
+        throw Exception('Insufficient C-Chain balance');
+      }
+      
+      _balance -= amount;
+      _stakedAmount += amount;
+    } else { // P→C transfer (from P-Chain to C-Chain)
+      if (amount > _stakedAmount) {
+        throw Exception('Insufficient P-Chain balance');
+      }
+      
+      _stakedAmount -= amount;
+      _balance += amount;
+      
+      if (_stakedAmount <= 0) {
+        _stakingActive = false;
+        _stakingSince = null;
+        _lockupPeriodDays = 0;
+        _stakedAmount = 0;
+      }
+    }
+    
+    // Simulate transaction
+    final txHash = direction 
+        ? 'c2p-transfer-${DateTime.now().millisecondsSinceEpoch}'
+        : 'p2c-transfer-${DateTime.now().millisecondsSinceEpoch}';
+    
+    // Add transaction to history
+    _addMockTransaction(
+      hash: txHash,
+      from: direction ? 'C-Chain' : 'P-Chain',
+      to: direction ? 'P-Chain' : 'C-Chain',
+      value: amount,
+      status: 'confirmed',
+      type: 'chain_transfer',
+      timestamp: DateTime.now(),
+    );
+    
+    notifyListeners();
+    return txHash;
+  }
+  
+  // Test helpers for P-Chain functionality
+  void setStakedAmount(double amount) {
+    _stakedAmount = amount;
+    notifyListeners();
+  }
+  
+  void setStakingActive(bool active) {
+    _stakingActive = active;
+    notifyListeners();
+  }
+  
+  void setStakingRewards(double rewards) {
+    _stakingRewards = rewards;
+    notifyListeners();
+  }
+  
+  void setStakingSince(DateTime stakingSince) {
+    _stakingSince = stakingSince;
+    notifyListeners();
+  }
+  
+  void setLockupPeriod(int days) {
+    _lockupPeriodDays = days;
+    notifyListeners();
   }
 }

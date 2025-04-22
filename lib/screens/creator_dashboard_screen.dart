@@ -6,7 +6,7 @@ import 'wallet_screen.dart';
 import 'auction_screen.dart';
 import 'dart:developer' as developer;
 import 'user_auction_browse_screen.dart';
-import '../services/mock_buttplug_service.dart';
+import '../services/device_connector_interface.dart';
 
 class CreatorDashboardScreen extends StatefulWidget {
   const CreatorDashboardScreen({Key? key}) : super(key: key);
@@ -47,7 +47,7 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final web3 = Provider.of<Web3Service>(context);
-    final buttplugService = Provider.of<MockButtplugService>(context);
+    final deviceConnector = Provider.of<DeviceConnectorInterface>(context);
     
     // Add extensive debug logging
     developer.log('CreatorDashboardScreen build called', name: 'CreatorDashboard');
@@ -160,18 +160,18 @@ class _CreatorDashboardScreenState extends State<CreatorDashboardScreen> with Si
           ),
           IconButton(
             icon: Icon(
-              buttplugService.isConnected
+              deviceConnector.isConnected
                   ? Icons.bluetooth_connected
                   : Icons.bluetooth,
-              color: buttplugService.isConnected
+              color: deviceConnector.isConnected
                   ? theme.colorScheme.primary
                   : theme.colorScheme.onSurface.withOpacity(0.7),
             ),
             onPressed: () {
-              if (buttplugService.isConnected) {
-                buttplugService.disconnect();
+              if (deviceConnector.isConnected) {
+                deviceConnector.disconnect();
               } else {
-                buttplugService.connect();
+                deviceConnector.connect();
               }
             },
           ),
