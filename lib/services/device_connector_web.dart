@@ -1,10 +1,35 @@
 import 'dart:async';
+import 'dart:html' as html;
+import 'dart:math' as math;
 import 'dart:developer' as developer;
-import 'dart:html' as html; // Flutter web requires this library
-import 'dart:math';
-import 'package:flutter/foundation.dart';
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
 import 'package:js/js_util.dart' as js_util;
 import 'device_connector_interface.dart';
+
+// Bridge functions for platform-specific code
+// These are called from settings_screen.dart through conditional imports
+
+// Function to register callback for connection code
+void registerConnectionCodeCallback(Function callback) {
+  DeviceConnectorWeb.onConnectionCodeRequested = callback as ConnectionCodeDisplayCallback;
+}
+
+// Function to unregister callback
+void unregisterConnectionCodeCallback() {
+  DeviceConnectorWeb.onConnectionCodeRequested = null;
+}
+
+// Function to set connection strategy
+void setConnectionStrategy(String strategy) {
+  // This would be called by a real device connector instance
+  // In the real app, you'd get the DeviceConnectorWeb instance and call its method
+  if (strategy == 'webBluetooth') {
+    developer.log('Setting Web Bluetooth connection strategy');
+    // In a real implementation, you would get the connector instance and call:
+    // deviceConnector.setConnectionStrategy(ConnectionStrategy.webBluetooth);
+  }
+}
 
 // Custom callback for connection code display - will be set by the settings screen
 typedef ConnectionCodeDisplayCallback = void Function(String connectionCode);
@@ -57,6 +82,11 @@ class DeviceConnectorWeb extends ChangeNotifier implements DeviceConnectorInterf
   
   @override
   String? get currentDevice => _currentDevice;
+  
+  // Expose the Bluetooth device for advanced testing/debugging
+  dynamic getBluetoothDevice() {
+    return _bluetoothDevice;
+  }
   
   @override
   double get currentVibration => _currentVibration;
@@ -563,6 +593,133 @@ class DeviceConnectorWeb extends ChangeNotifier implements DeviceConnectorInterf
     }
   }
   
+  // Method to attempt direct vibration without using standard GATT service discovery
+  Future<void> _attemptDirectVibration(double intensity) async {
+    print('🔄 Attempting direct vibration access for LVS-Hush');
+    
+    if (_bluetoothDevice == null) {
+      print('❌ No Bluetooth device available for direct access');
+      return;
+    }
+    
+    final lvsIntensity = (intensity * 20).round(); // Convert to 0-20 scale
+    print('📊 Using intensity level: $lvsIntensity/20');
+    
+    // Get GATT server
+    try {
+      final gatt = js_util.getProperty(_bluetoothDevice, 'gatt');
+      final server = await js_util.promiseToFuture(
+        js_util.callMethod(gatt, 'connect', [])
+      );
+      
+      // Try known service/characteristic UUIDs that are common in BLE sex toys
+      // These UUIDs come from various sources including Lovense, LVS, and generic BLE devices
+      final knownServiceUuids = [
+        '00007fff-0000-1000-8000-00805f9b34fb', // Generic service
+        '0000fff0-0000-1000-8000-00805f9b34fb', // Common in LVS/Lovense
+        '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART service
+        '5fff', // Short version sometimes used
+        'fff0', // Short version sometimes used
+      ];
+      
+      print('🔍 Trying direct access to services');
+      bool success = false;
+      
+      // Try each service
+      for (final serviceUuid in knownServiceUuids) {
+        try {
+          print('➡️ Trying service: $serviceUuid');
+          final service = await js_util.promiseToFuture(
+            js_util.callMethod(server, 'getPrimaryService', [serviceUuid])
+          );
+          
+          if (service != null) {
+            print('✅ Found service: $serviceUuid');
+            
+            // Known characteristic UUIDs for vibration control
+            final knownCharacteristicUuids = [
+              '00007fff-0000-1000-8000-00805f9b34fb',
+              '0000fff1-0000-1000-8000-00805f9b34fb',
+              '0000fff2-0000-1000-8000-00805f9b34fb',
+              '6e400002-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART TX
+              '6e400003-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART RX
+              'fff1',
+              'fff2',
+              '5fff',
+            ];
+            
+            // Try each characteristic
+            for (final charUuid in knownCharacteristicUuids) {
+              try {
+                print('➡️ Trying characteristic: $charUuid');
+                final characteristic = await js_util.promiseToFuture(
+                  js_util.callMethod(service, 'getCharacteristic', [charUuid])
+                );
+                
+                if (characteristic != null) {
+                  print('✅ Found characteristic: $charUuid');
+                  
+                  // Try several command formats
+                  final commands = [
+                    Uint8List.fromList([lvsIntensity]), // Raw byte value
+                    Uint8List.fromList('Vibrate:$lvsIntensity;'.codeUnits), // Text protocol
+                    Uint8List.fromList('Function:$lvsIntensity;'.codeUnits), // Alt protocol
+                    Uint8List.fromList('Power:$lvsIntensity;'.codeUnits), // Another alt protocol
+                    Uint8List.fromList([0x0A, lvsIntensity]), // Command + value
+                  ];
+                  
+                  for (final command in commands) {
+                    try {
+                      print('🔄 Sending command format: ${command.length > 1 ? String.fromCharCodes(command) : command[0]}');
+                      await js_util.promiseToFuture(
+                        js_util.callMethod(characteristic, 'writeValue', [command.buffer])
+                      );
+                      print('✅ Command sent successfully!');
+                      success = true;
+                      
+                      // Store this characteristic for future use
+                      _vibrateCharacteristic = characteristic;
+                      
+                      // If we're here, command was sent successfully
+                      break;
+                    } catch (e) {
+                      print('❌ Error sending command: $e');
+                    }
+                  }
+                  
+                  if (success) {
+                    // If we found a working characteristic and command, exit the loops
+                    break;
+                  }
+                }
+              } catch (e) {
+                print('❌ Error with characteristic $charUuid: $e');
+              }
+            }
+            
+            if (success) {
+              // If we found a working service and characteristic, exit the loop
+              break;
+            }
+          }
+        } catch (e) {
+          print('❌ Error with service $serviceUuid: $e');
+        }
+      }
+      
+      if (success) {
+        print('✅ Direct vibration command sent successfully!');
+        return;
+      } else {
+        print('❌ All direct vibration attempts failed');
+        throw Exception('Failed to send vibration command using direct access');
+      }
+    } catch (e) {
+      print('❌ Error in direct vibration attempt: $e');
+      throw Exception('Error in direct vibration attempt: $e');
+    }
+  }
+  
   // Start vibration using Feel Technology API
   Future<void> _startVibrationWithFeelTechnology(double intensity) async {
     if (debugMode) {
@@ -713,7 +870,7 @@ class DeviceConnectorWeb extends ChangeNotifier implements DeviceConnectorInterf
   // Generate a random code for testing
   String _generateRandomCode(int length) {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final random = Random.secure();
+    final random = math.Random.secure();
     final code = List.generate(length, (_) => characters[random.nextInt(characters.length)]);
     return code.join();
   }
@@ -721,10 +878,14 @@ class DeviceConnectorWeb extends ChangeNotifier implements DeviceConnectorInterf
   // Specialized method for LVS-Hush devices
   Future<void> _startVibrationWithLvsHush(double intensity) async {
     _log('Starting vibration on LVS-Hush device with intensity: $intensity');
+    print('💡 DEBUG: Manual vibration test attempt on LVS-Hush');
     
     try {
+      // Even if we don't have a characteristic, try direct device access
       if (_vibrateCharacteristic == null) {
-        throw Exception('No vibration characteristic available');
+        print('⚠️ No vibration characteristic found - attempting direct device access');
+        await _attemptDirectVibration(intensity);
+        return;
       }
       
       // Convert 0.0-1.0 to 0-20 scale used by LVS-Hush

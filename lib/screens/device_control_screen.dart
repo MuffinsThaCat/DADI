@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../services/device_connector_interface.dart';
 import '../widgets/wavy_background.dart';
 
+/// A platform-agnostic implementation of the device control screen
+/// Uses DeviceConnectorInterface to work on both web and mobile platforms
 class DeviceControlScreen extends StatefulWidget {
   final String deviceId;
   final DateTime endTime;
@@ -24,515 +26,441 @@ class _DeviceControlScreenState extends State<DeviceControlScreen> with SingleTi
   Timer? _controlTimer;
   String? _currentDeviceId;
   late AnimationController _pulseAnimation;
+  
+  // Platform-agnostic fields for device control
+  String _selectedCommandType = 'raw';
+  double _testCommandValue = 10;
+  final TextEditingController _customCommandController = TextEditingController();
+  String? _testCommandStatus;
+  bool _testCommandSuccess = false;
 
   @override
   void initState() {
     super.initState();
-    _connectToDevice();
     
-    // Initialize pulse animation for the intensity indicator
     _pulseAnimation = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: const Duration(milliseconds: 1000),
     )..repeat(reverse: true);
     
-    // Start timer to check control period
-    _controlTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) {
-        setState(() {
-          // Check if control period has expired
-          if (DateTime.now().isAfter(widget.endTime) && _intensity > 0) {
-            _intensity = 0;
-            final deviceConnector = context.read<DeviceConnectorInterface>();
-            deviceConnector.stopVibration();
-          }
-        });
+    _setupDeviceConnection();
+    _setupControlTimer();
+  }
+
+  void _setupDeviceConnection() async {
+    // Try to connect to the device
+    final connector = Provider.of<DeviceConnectorInterface>(context, listen: false);
+    
+    try {
+      await connector.connectToDevice(widget.deviceId);
+      
+      setState(() {
+        _isConnected = connector.isConnected;
+        _currentDeviceId = connector.currentDevice;
+      });
+      
+      if (connector.isConnected) {
+        debugPrint('Connected to device: ${widget.deviceId}');
+      } else {
+        debugPrint('Failed to connect to device: ${widget.deviceId}');
       }
+    } catch (e) {
+      debugPrint('Error connecting to device: $e');
+      setState(() {
+        _isConnected = false;
+      });
+    }
+  }
+
+  void _setupControlTimer() {
+    // Set up a timer to control the device based on intensity
+    _controlTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+      if (!_isConnected || _intensity <= 0) return;
+      
+      final connector = Provider.of<DeviceConnectorInterface>(context, listen: false);
+      connector.startVibration(_intensity);
     });
+  }
+
+  void _stopVibration() {
+    final connector = Provider.of<DeviceConnectorInterface>(context, listen: false);
+    connector.stopVibration();
+    setState(() {
+      _intensity = 0;
+    });
+  }
+
+  void _disconnectDevice() async {
+    final connector = Provider.of<DeviceConnectorInterface>(context, listen: false);
+    
+    try {
+      await connector.disconnect();
+      setState(() {
+        _isConnected = false;
+        _currentDeviceId = null;
+      });
+    } catch (e) {
+      debugPrint('Error disconnecting device: $e');
+    }
+  }
+
+  Future<void> _handleCustomCommand() async {
+    if (!_isConnected) {
+      setState(() {
+        _testCommandStatus = 'Device not connected';
+        _testCommandSuccess = false;
+      });
+      return;
+    }
+
+    final connector = Provider.of<DeviceConnectorInterface>(context, listen: false);
+    
+    try {
+      bool success = false;
+      String status = 'Command failed';
+      
+      if (_selectedCommandType == 'raw') {
+        // Parse the hex string to bytes
+        final String hexStr = _customCommandController.text.replaceAll(' ', '');
+        final List<int> bytes = [];
+        
+        for (int i = 0; i < hexStr.length; i += 2) {
+          if (i + 2 <= hexStr.length) {
+            final byte = int.parse(hexStr.substring(i, i + 2), radix: 16);
+            bytes.add(byte);
+          }
+        }
+        
+        // Since we don't have a direct raw command method, we'll simulate it
+        // by mapping the first byte to intensity (if possible)
+        if (bytes.isNotEmpty) {
+          final intensity = bytes[0] / 255.0;
+          await connector.startVibration(intensity);
+          success = connector.currentVibration > 0;
+          status = success ? 'Raw command interpreted as intensity' : 'Failed to send raw command';
+        } else {
+          status = 'Invalid hex string';
+          success = false;
+        }
+      } else if (_selectedCommandType == 'intensity') {
+        // Send an intensity command
+        final intensity = _testCommandValue / 100.0;
+        await connector.startVibration(intensity);
+        success = connector.currentVibration > 0;
+        status = success ? 'Intensity command sent' : 'Failed to send intensity command';
+      } else if (_selectedCommandType == 'pattern') {
+        // Pattern implementation using the available interface methods
+        // Since we don't have a direct pattern method, we'll simulate it
+        try {
+          for (double intensity in [0.3, 0.0, 0.5, 0.0, 0.7, 0.0, 1.0, 0.0]) {
+            await connector.startVibration(intensity);
+            await Future.delayed(const Duration(milliseconds: 300));
+          }
+          await connector.stopVibration();
+          success = true;
+          status = 'Pattern sequence completed';
+        } catch (e) {
+          success = false;
+          status = 'Pattern sequence failed: $e';
+        }
+      }
+      
+      setState(() {
+        _testCommandStatus = status;
+        _testCommandSuccess = success;
+      });
+    } catch (e) {
+      setState(() {
+        _testCommandStatus = 'Error: $e';
+        _testCommandSuccess = false;
+      });
+    }
   }
 
   @override
   void dispose() {
     _controlTimer?.cancel();
     _pulseAnimation.dispose();
+    _customCommandController.dispose();
+    _stopVibration();
+    _disconnectDevice();
     super.dispose();
-  }
-
-  Future<void> _connectToDevice() async {
-    final deviceConnector = context.read<DeviceConnectorInterface>();
-    try {
-      if (!deviceConnector.isConnected) {
-        await deviceConnector.connect();
-      }
-      setState(() {
-        _isConnected = deviceConnector.isConnected;
-        _currentDeviceId = deviceConnector.currentDevice;
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error connecting to device: $e')),
-        );
-      }
-    }
-  }
-
-  bool get _hasControl {
-    final now = DateTime.now();
-    return now.isBefore(widget.endTime);
-  }
-
-  void _updateIntensity(double value) {
-    setState(() => _intensity = value);
-    final deviceConnector = context.read<DeviceConnectorInterface>();
-    if (value > 0) {
-      deviceConnector.startVibration(value);
-    } else {
-      deviceConnector.stopVibration();
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final deviceConnector = context.watch<DeviceConnectorInterface>();
-    
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          'Device Control',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            letterSpacing: 0.5,
+        title: const Text('Device Control'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bluetooth),
+            onPressed: _isConnected ? _disconnectDevice : _setupDeviceConnection,
+            tooltip: _isConnected ? 'Disconnect' : 'Connect',
           ),
-        ),
-        elevation: 0,
+        ],
       ),
-      body: WavyBackground(
-        primaryColor: theme.colorScheme.primary.withOpacity(0.7),
-        secondaryColor: theme.colorScheme.secondary.withOpacity(0.7),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Device and control status
-                _buildStatusSection(),
-                
-                const SizedBox(height: 24),
-                
-                // Control interface
-                _buildControlInterface(theme),
-                
-                const SizedBox(height: 20),
-                
-                // Control buttons
-                if (_hasControl && _isConnected) 
-                  _buildControlButtons(deviceConnector),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-  
-  Widget _buildStatusSection() {
-    final remainingTime = widget.endTime.difference(DateTime.now());
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Status',
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        const SizedBox(height: 12),
-        
-        // Connection status card
-        _buildStatusCard(
-          icon: _isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-          title: 'Device Connection',
-          isActive: _isConnected,
-          subtitle: _currentDeviceId != null ? 'Connected to: ${_currentDeviceId!}' : 'Not connected',
-        ),
-        
-        // Remaining time card
-        _buildStatusCard(
-          icon: _hasControl ? Icons.timer : Icons.timer_off,
-          title: 'Control Period',
-          isActive: _hasControl,
-          subtitle: _hasControl 
-            ? 'Time remaining: ${_formatDuration(remainingTime)}'
-            : 'Control period has ended',
-          showProgressBar: _hasControl,
-          progressValue: _hasControl 
-            ? remainingTime.inSeconds / (widget.endTime.difference(DateTime.now().subtract(const Duration(minutes: 30)))).inSeconds
-            : 0,
-        ),
-      ],
-    );
-  }
-  
-  Widget _buildStatusCard({
-    required IconData icon,
-    required String title,
-    required bool isActive,
-    required String subtitle,
-    bool showProgressBar = false,
-    double progressValue = 0,
-  }) {
-    final theme = Theme.of(context);
-    
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 4,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  icon,
-                  color: isActive 
-                    ? theme.colorScheme.primary 
-                    : theme.colorScheme.error,
-                  size: 28,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        subtitle,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: isActive 
-                            ? theme.colorScheme.primary 
-                            : theme.colorScheme.error,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isActive 
-                      ? theme.colorScheme.primary.withOpacity(0.2) 
-                      : theme.colorScheme.error.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    isActive ? 'Active' : 'Inactive',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: isActive 
-                        ? theme.colorScheme.primary 
-                        : theme.colorScheme.error,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            
-            if (showProgressBar) ...[
-              const SizedBox(height: 12),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: LinearProgressIndicator(
-                  value: progressValue.clamp(0.0, 1.0),
-                  minHeight: 8,
-                  backgroundColor: theme.colorScheme.primary.withOpacity(0.2),
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    theme.colorScheme.primary,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-  
-  Widget _buildControlInterface(ThemeData theme) {
-    if (!_hasControl || !_isConnected) {
-      return _buildControlDisabledMessage();
-    }
-    
-    final int intensityPercentage = (_intensity * 100).round();
-    
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          children: [
-            Text(
-              'Intensity Control',
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 24),
-            
-            // Intensity circle indicator
-            AnimatedBuilder(
-              animation: _pulseAnimation,
-              builder: (context, child) {
-                return Container(
-                  width: 150,
-                  height: 150,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: theme.colorScheme.primary.withOpacity(0.1),
-                    boxShadow: [
-                      BoxShadow(
-                        color: theme.colorScheme.primary.withOpacity(_intensity * 0.5),
-                        blurRadius: 20 + (_pulseAnimation.value * 30 * _intensity),
-                        spreadRadius: 5 + (_pulseAnimation.value * 10 * _intensity),
-                      ),
-                    ],
-                  ),
-                  child: Center(
-                    child: Text(
-                      '$intensityPercentage%',
-                      style: theme.textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                  ),
-                );
-              }
-            ),
-            
-            const SizedBox(height: 30),
-            
-            // Slider
-            SliderTheme(
-              data: SliderThemeData(
-                activeTrackColor: theme.colorScheme.primary,
-                inactiveTrackColor: theme.colorScheme.primary.withOpacity(0.2),
-                thumbColor: theme.colorScheme.primary,
-                trackHeight: 8,
-                thumbShape: const RoundSliderThumbShape(
-                  enabledThumbRadius: 12,
-                ),
-                overlayShape: const RoundSliderOverlayShape(
-                  overlayRadius: 20,
-                ),
-              ),
-              child: Slider(
-                value: _intensity,
-                onChanged: _updateIntensity,
-                divisions: 20,
-                label: '$intensityPercentage%',
-              ),
-            ),
-            
-            // Intensity labels
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Low',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  Text(
-                    'Medium',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  Text(
-                    'High',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-  
-  Widget _buildControlDisabledMessage() {
-    final theme = Theme.of(context);
-    
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: 20.0,
-          vertical: 30.0,
-        ),
-        child: Column(
-          children: [
-            Icon(
-              _isConnected 
-                ? Icons.access_time_filled 
-                : Icons.bluetooth_disabled,
-              size: 60,
-              color: theme.colorScheme.error.withOpacity(0.8),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              !_isConnected 
-                ? 'Device Not Connected' 
-                : 'Control Period Has Ended',
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.error,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              !_isConnected 
-                ? 'Please connect your device to enable control features' 
-                : 'Your control period for this device has ended',
-              style: theme.textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: !_isConnected ? _connectToDevice : null,
-              icon: Icon(
-                !_isConnected 
-                  ? Icons.bluetooth_searching
-                  : Icons.timelapse,
-              ),
-              label: Text(
-                !_isConnected 
-                  ? 'Connect Device'
-                  : 'Control Expired',
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: theme.colorScheme.error,
-                side: BorderSide(
-                  color: theme.colorScheme.error,
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-  
-  Widget _buildControlButtons(DeviceConnectorInterface deviceConnector) {
-    final theme = Theme.of(context);
-    
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _buildControlButton(
-          label: 'Stop',
-          icon: Icons.stop_circle_outlined,
-          onPressed: () {
-            setState(() => _intensity = 0.0);
-            deviceConnector.stopVibration();
-          },
-          color: theme.colorScheme.error,
-        ),
-        const SizedBox(width: 16),
-        _buildControlButton(
-          label: '50%',
-          icon: Icons.wifi_tethering,
-          onPressed: () {
-            setState(() => _intensity = 0.5);
-            deviceConnector.startVibration(0.5);
-          },
-          color: theme.colorScheme.primary,
-        ),
-        const SizedBox(width: 16),
-        _buildControlButton(
-          label: 'Max',
-          icon: Icons.power,
-          onPressed: () {
-            setState(() => _intensity = 1.0);
-            deviceConnector.startVibration(1.0);
-          },
-          color: Colors.purple,
-        ),
-      ],
-    );
-  }
-  
-  Widget _buildControlButton({
-    required String label,
-    required IconData icon,
-    required VoidCallback onPressed,
-    required Color color,
-  }) {
-    return ElevatedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: Colors.white,
-        elevation: 3,
-        padding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 12,
-        ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+      body: Stack(
+        children: [
+          WavyBackground(child: Container(), primaryColor: Colors.blue.withOpacity(0.3), secondaryColor: Colors.purple.withOpacity(0.2)),
+          _buildMainContent(),
+        ],
       ),
     );
   }
 
-  String _formatDuration(Duration duration) {
-    if (duration.isNegative) {
-      return 'Expired';
-    }
-    
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60);
-    final seconds = duration.inSeconds.remainder(60);
-    
-    final parts = <String>[];
-    if (hours > 0) {
-      parts.add('${hours}h');
-    }
-    if (minutes > 0 || hours > 0) {
-      parts.add('${minutes}m');
-    }
-    parts.add('${seconds}s');
-    
-    return parts.join(' ');
+  Widget _buildMainContent() {
+    return SafeArea(
+      child: Column(
+        children: [
+          _buildConnectionStatus(),
+          _buildIntensityControls(),
+          _buildCustomCommandsSection(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionStatus() {
+    final Color statusColor = _isConnected ? Colors.green : Colors.red;
+    final String statusText = _isConnected 
+        ? 'Connected to: ${_currentDeviceId ?? ''}'
+        : 'Not connected';
+        
+    return Container(
+      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 10,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(
+            _isConnected ? Icons.check_circle : Icons.error,
+            color: statusColor,
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              statusText,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: statusColor,
+              ),
+            ),
+          ),
+          AnimatedBuilder(
+            animation: _pulseAnimation,
+            builder: (context, child) {
+              return Opacity(
+                opacity: _isConnected ? 0.3 + (_pulseAnimation.value * 0.7) : 0.3,
+                child: Icon(
+                  Icons.bluetooth,
+                  color: statusColor,
+                  size: 24,
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIntensityControls() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 10,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Intensity Control',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              const Icon(Icons.vibration),
+              Expanded(
+                child: Slider(
+                  value: _intensity,
+                  onChanged: _isConnected 
+                      ? (value) {
+                          setState(() => _intensity = value);
+                        }
+                      : null,
+                  min: 0.0,
+                  max: 1.0,
+                  divisions: 20,
+                  label: '${(_intensity * 100).round()}%',
+                ),
+              ),
+              SizedBox(
+                width: 50,
+                child: Text(
+                  '${(_intensity * 100).round()}%',
+                  textAlign: TextAlign.end,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              ElevatedButton(
+                onPressed: _isConnected ? () => setState(() => _intensity = 0.2) : null,
+                child: const Text('Low'),
+              ),
+              ElevatedButton(
+                onPressed: _isConnected ? () => setState(() => _intensity = 0.5) : null,
+                child: const Text('Medium'),
+              ),
+              ElevatedButton(
+                onPressed: _isConnected ? () => setState(() => _intensity = 0.8) : null,
+                child: const Text('High'),
+              ),
+              ElevatedButton(
+                onPressed: _isConnected ? () => setState(() => _intensity = 0.0) : null,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                ),
+                child: const Text('Stop'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCustomCommandsSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 10,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Advanced Controls',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 16),
+          DropdownButton<String>(
+            value: _selectedCommandType,
+            isExpanded: true,
+            onChanged: (String? newValue) {
+              if (newValue != null) {
+                setState(() {
+                  _selectedCommandType = newValue;
+                });
+              }
+            },
+            items: <String>['raw', 'intensity', 'pattern']
+                .map<DropdownMenuItem<String>>((String value) {
+              return DropdownMenuItem<String>(
+                value: value,
+                child: Text(value.toUpperCase()),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          if (_selectedCommandType == 'raw')
+            TextField(
+              controller: _customCommandController,
+              decoration: const InputDecoration(
+                labelText: 'Hex Command (e.g., FF 00 A1)',
+                hintText: 'Enter hex bytes separated by spaces',
+                border: OutlineInputBorder(),
+              ),
+            )
+          else if (_selectedCommandType == 'intensity')
+            Column(
+              children: [
+                Text('Intensity: ${_testCommandValue.round()}%'),
+                Slider(
+                  value: _testCommandValue,
+                  min: 0,
+                  max: 100,
+                  divisions: 100,
+                  label: _testCommandValue.round().toString(),
+                  onChanged: (double value) {
+                    setState(() {
+                      _testCommandValue = value;
+                    });
+                  },
+                ),
+              ],
+            )
+          else if (_selectedCommandType == 'pattern')
+            const Text('Will send a predefined pattern'),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _isConnected ? _handleCustomCommand : null,
+                  child: const Text('Send Command'),
+                ),
+              ),
+            ],
+          ),
+          if (_testCommandStatus != null)
+            Container(
+              margin: const EdgeInsets.only(top: 16),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: _testCommandSuccess ? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _testCommandStatus!,
+                style: TextStyle(
+                  color: _testCommandSuccess ? Colors.green[800] : Colors.red[800],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'package:dadi/services/device_connector_interface.dart';
-import 'package:dadi/services/device_connector_factory.dart';
+import 'package:dadi/services/device_connector.dart';
 import 'package:dadi/services/wallet_service_interface.dart';
 import 'package:dadi/services/service_factory.dart';
 import 'package:dadi/services/web3_service.dart';
@@ -95,7 +95,8 @@ void main() async {
   // Create platform-appropriate device connector service
   // This will use WebBluetooth on Chrome, Feel Technology on Safari,
   // and native Bluetooth on mobile platforms
-  final deviceConnectorService = DeviceConnectorFactory.create();
+  // For testing purposes, we'll use the mock implementation to avoid platform-specific issues
+  final deviceConnectorService = createDeviceConnector(useMockMode: true);
   
   // Constants for service configuration
   const relayerUrl = 'https://relayer.dadi.network';

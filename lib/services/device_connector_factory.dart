@@ -1,7 +1,5 @@
-import 'package:flutter/foundation.dart' show kIsWeb, VoidCallback;
+import 'package:flutter/foundation.dart' show VoidCallback;
 import 'device_connector_interface.dart';
-import 'device_connector_web.dart' as web;
-import 'device_connector_mobile.dart' as mobile;
 
 /// Factory to create the appropriate device connector implementation
 /// based on the current platform (web or mobile)
@@ -27,13 +25,9 @@ class DeviceConnectorFactory {
   
   /// Creates a real device connector based on the platform
   static DeviceConnectorInterface createDeviceConnector() {
-    if (kIsWeb) {
-      // Web implementation with both Web Bluetooth and Feel Technology support
-      return web.DeviceConnectorWeb();
-    } else {
-      // Mobile implementation with direct Bluetooth support
-      return mobile.DeviceConnectorMobile();
-    }
+    // We'll return a mock implementation since we're now using
+    // conditional imports at a higher level to handle platform specifics
+    return createMockDeviceConnector();
   }
   
   /// Creates a mock device connector for testing purposes

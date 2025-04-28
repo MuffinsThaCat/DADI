@@ -8,8 +8,8 @@ import '../services/device_connector_factory.dart';
 import '../services/device_connector_interface.dart';
 import '../widgets/wavy_background.dart';
 
-// Only import this on web to avoid errors on mobile
-import '../services/device_connector_web.dart' if (dart.library.io) 'dart:ui' as web;
+// Import platform-specific stub for non-web platforms
+import '../services/device_connector_stub.dart' if (dart.library.html) '../services/device_connector_web.dart' as web;
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -31,7 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     
     // Register connection code display callback if on web
     if (kIsWeb) {
-      web.DeviceConnectorWeb.onConnectionCodeRequested = _showFeelConnectCode;
+      web.registerConnectionCodeCallback(_showFeelConnectCode);
     }
   }
   
@@ -46,7 +46,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _deviceConnector.removeListener(_updateDeviceState);
     // Unregister callback if on web
     if (kIsWeb) {
-      web.DeviceConnectorWeb.onConnectionCodeRequested = null;
+      web.unregisterConnectionCodeCallback();
     }
     super.dispose();
   }
@@ -507,10 +507,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 );
                                 
                                 // Force Web Bluetooth strategy
-                                if (kIsWeb && _deviceConnector is web.DeviceConnectorWeb) {
-                                  (_deviceConnector as web.DeviceConnectorWeb).setConnectionStrategy(
-                                    web.ConnectionStrategy.webBluetooth
-                                  );
+                                if (kIsWeb) {
+                                  web.setConnectionStrategy('webBluetooth');
                                 }
                                 
                                 await _deviceConnector.connect();
